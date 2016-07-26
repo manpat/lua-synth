@@ -152,42 +152,14 @@ local melodyseq = seq.cycle(4 + pulse(1/2)*osc.sqr(1/3), flatten{
 	9/8, 4/3, 9/4, 10/4
 })
 
--- local wave = (osc.sqr(bassseq)*0.5 + osc.tri(bassseq*(5/4 + osc.sin(6)*0.02)):shift(0.5)^4*0.6)*env.linear(48)^2
--- 	+ mix(env.linear(32)^2 * 0.5, osc.sin(melodyseq*(110*6/2)), osc.saw(melodyseq*(110*3/2)):shift(0.25))*0.5
+local wave = (osc.sqr(bassseq)*0.5 + osc.tri(bassseq*(5/4 + osc.sin(6)*0.02)):shift(0.5)^4*0.6)*env.linear(48)^2
+	+ mix(env.linear(32)^2 * 0.5, osc.sin(melodyseq*(110*6/2)), osc.saw(melodyseq*(110*3/2)):shift(0.25))*0.5
 
--- osc.output(wave * env.linear(8)^2)
+osc.output(wave * env.linear(8)^2)
 
 -- local wave = (osc.sqr(bassseq)*0.5 + osc.tri(bassseq*(5/4 + osc.sin(6)*0.02)):shift(0.5)^4*0.6)*midi.ctl(2)^2
 -- 	+ mix(midi.ctl(3)^2 * 0.5, osc.sin(melodyseq*(110*6/2)), osc.saw(melodyseq*(110*3/2)):shift(0.25))*0.5
 
 -- osc.output(wave * (midi.ctl(1) ^ 2));
-
--- osc.output(osc.saw(
--- 	(seq.cycle(4, {
--- 		midi.ctl(1), midi.ctl(2), midi.ctl(3), midi.ctl(4), 
--- 		midi.ctl(5), midi.ctl(6), midi.ctl(7), midi.ctl(8), 
--- 	}) + 1) * 55
--- ))
-
--- local key = midi.key(0)
-
--- local out = osc.sin((4000*midi.ctl(1)) * osc.tri(key) * midi.vel(0))
-
--- out = out + osc.tri(key * 3/2)*midi.ctl(2)
--- out = out + osc.tri(key * 2)*midi.ctl(3)
--- out = out + osc.tri(key * 3)*midi.ctl(4)
-
-local arp = seq.cycle(midi.ctl(2)*32, {1, 2, 4, 3})
-local out = 0
-for i=0,15 do
-	-- local e = env.ar(midi.ctl(5)*4, midi.ctl(6)*4):trigger(midi.trg(i))
-	local e = env.linear(midi.ctl(5)*4):trigger(midi.trg(i))
-	out = out + osc.sin((4000*midi.ctl(1)) * osc.sin(midi.key(i) * arp) * midi.vel(i)) * e
-end
-
-local basskey = midi.key(0, 1)
-local trebkey = midi.key(-1, 1)
--- out = out + (osc.tri(basskey/4) + osc.tri(basskey/2) + osc.tri(basskey)) * 0.3
--- out = out + osc.tri(trebkey*2)*0.5
 
 osc.output(out * 0.5)

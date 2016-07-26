@@ -1,619 +1,316 @@
 #include "audio.h"
-#include <limits>
-#include <vector>
-#include <mutex>
-#include <map>
 
-FMOD::System* fmodSystem;
-FMOD::Channel* channel;
+#include <algorithm>
+#include <cmath>
+
+#include <fmod.hpp>
+#include <fmod_errors.h>
+
+namespace {
+	FMOD::System* fmodSystem;
+	std::vector<Synth*> synths;
+}
 
 static void cfmod(FMOD_RESULT result) {
 	if (result != FMOD_OK) {
-		printf("FMOD error! (%d) %s\n", result, FMOD_ErrorString(result));
-		throw "FMOD Error";
+		fprintf(stderr, "FMOD error! (%d) %s\n", result, FMOD_ErrorString(result));
+		std::exit(1);
 	}
 }
 
-namespace Wave {
-	f32 sin(f64 phase){
-		return std::sin(2.0*M_PI*phase);
-	}
-
-	f32 saw(f64 phase){
-		return std::fmod(phase*2.0, 2.0)-1.0;
-	}
-
-	f32 sqr(f64 phase, f64 width){
-		width = clamp(width, 0.0, 1.0);
-		auto nph = std::fmod(phase, 1.0);
-		if(nph < width) return -1.0;
-
-		return 1.0;
-	}
-
-	f32 tri(f64 phase){
-		auto nph = std::fmod(phase, 1.0);
-		if(nph <= 0.5) return (nph-0.25)*4.0;
-
-		return (0.75-nph)*4.0;
-	}
-
-	f32 noise(f64) {
-		return (std::rand() %100000) / 50000.f - 0.5f;
-	}
+template<class F1, class F2, class F3>
+F1 clamp(F1 v, F2 mn, F3 mx) {
+	return std::max(std::min(v, (F1)mx), (F1)mn);
 }
 
-namespace Env {
-	f32 linear(f32 phase) {
-		return clamp(phase, 0, 1);
+FMOD_RESULT F_CALLBACK DSPCallback(FMOD_DSP_STATE*, f32*, f32*, u32, s32, s32*);
+
+Synth* CreateSynth() {
+	auto s = new Synth{};
+	s->playing = false;
+
+	FMOD::DSP* dsp;
+
+	{	FMOD_DSP_DESCRIPTION desc;
+		memset(&desc, 0, sizeof(desc));
+
+		desc.numinputbuffers = 0;
+		desc.numoutputbuffers = 1;
+		desc.read = DSPCallback;
+		desc.userdata = s;
+
+		cfmod(fmodSystem->createDSP(&desc, &dsp));
+		cfmod(dsp->setChannelFormat(FMOD_CHANNELMASK_MONO,1,FMOD_SPEAKERMODE_MONO));
 	}
 
-	f32 exp(f32 phase) {
-		f32 v = linear(phase);
-		return v*v;
+	cfmod(dsp->setBypass(false));
+
+	FMOD::ChannelGroup* mastergroup;
+	FMOD::Channel* channel;
+
+	cfmod(fmodSystem->getMasterChannelGroup(&mastergroup));
+	cfmod(fmodSystem->playDSP(dsp, mastergroup, false, &channel));
+	cfmod(channel->setMode(FMOD_2D));
+	cfmod(channel->setVolume(0.7f));
+
+	synths.push_back(s);
+	return s;
+}
+
+Synth* GetSynth(u32 id) {
+	if(id >= synths.size())
+		return nullptr;
+
+	return synths[id];
+}
+
+template<class... Args>
+u32 CreateNode(Synth* syn, NodeType type, Args&&... vargs) {
+	SynthParam args[] {vargs...};
+
+	SynthNode node;
+	node.type = type;
+	node.inputTypes = 0;
+	for(u32 i = 0; i < sizeof...(vargs); i++) {
+		node.inputTypes |= args[i].isNode?(1u<<i):0;
+		node.inputs[i] = args[i].node;
 	}
 
-	f32 ar(f32 phase, f32 turn) {
-		if(phase < turn)
-			return clamp(phase/turn, 0, 1);
-
-		return clamp(1-(phase-turn)/(1-turn), 0, 1);
-	}
-
-	f32 ear(f32 phase, f32 turn) {
-		f32 v = Env::ar(phase, turn);
-		return v*v;
-	}
+	syn->nodes.push_back(node);
+	return syn->nodes.size()-1u;
 }
 
-constexpr f32 infinity = std::numeric_limits<f32>::infinity();
-
-SynthNode synthNodes[1024<<4];
-u32 nodeCount = 0;
-u32 triggerCount = 0;
-s32 outputNode = -1;
-
-SynthNode* NewSynthNode(u8 type) {
-	synthNodes[nodeCount].id = nodeCount;
-	synthNodes[nodeCount].type = type;
-
-	switch(type) {
-	case SYNSINE:
-	case SYNTRIANGLE:
-	case SYNSAW:
-	case SYNSQUARE:
-		synthNodes[nodeCount].frequency = -1;
-		synthNodes[nodeCount].phaseOffset = -1;
-		synthNodes[nodeCount].duty = -1;
-		break;
-
-	case SYNTRIGGER:
-		synthNodes[nodeCount].triggerID = triggerCount++;
-		break;
-
-
-	case SYNCYCLE:
-		synthNodes[nodeCount].seqrate = -1;
-		synthNodes[nodeCount].seqlength = 0;
-		synthNodes[nodeCount].sequence = nullptr;
-		break;
-
-	case SYNLINEARENV:
-	case SYNARENV:
-		synthNodes[nodeCount].trigger = -1;
-		break;
-
-	case SYNMIDIKEY:
-	case SYNMIDIKEYVEL:
-	case SYNMIDIKEYTRIGGER:
-		synthNodes[nodeCount].midiKey = -1;
-		break;
-	}
-
-	return &synthNodes[nodeCount++];
+u32 NewSinOscillator(Synth* syn, SynthParam freq, SynthParam phaseOffset) {
+	return CreateNode(syn, NodeType::SourceSin, freq, phaseOffset);
+}
+u32 NewTriOscillator(Synth* syn, SynthParam freq, SynthParam phaseOffset) {
+	return CreateNode(syn, NodeType::SourceTri, freq, phaseOffset);
+}
+u32 NewSqrOscillator(Synth* syn, SynthParam freq, SynthParam phaseOffset, SynthParam duty) {
+	return CreateNode(syn, NodeType::SourceSqr, freq, phaseOffset, duty);
+}
+u32 NewSawOscillator(Synth* syn, SynthParam freq, SynthParam phaseOffset) {
+	return CreateNode(syn, NodeType::SourceSaw, freq, phaseOffset);
+}
+u32 NewNoiseSource(Synth* syn) {
+	return CreateNode(syn, NodeType::SourceNoise);
+}
+u32 NewTimeSource(Synth* syn) {
+	return CreateNode(syn, NodeType::SourceTime);
 }
 
-u32 NewValue(f32 value) {
-	synthNodes[nodeCount].type = SYNVALUE;
-	synthNodes[nodeCount].value = value;
-	return nodeCount++;
+u32 NewFadeEnvelope(Synth* syn, SynthParam duration, u32 trigger) {
+	return CreateNode(syn, NodeType::EnvelopeFade, duration, trigger);
+}
+u32 NewADSREnvelope(Synth* syn, SynthParam attack, SynthParam decay, SynthParam sustain, SynthParam sustainlvl, 
+	SynthParam release, u32 trigger) {
+	return CreateNode(syn, NodeType::EnvelopeADSR, attack, decay, sustain, sustainlvl, release, trigger);
 }
 
-SynthNode* GetSynthNode(u32 id) {
-	assert(id < nodeCount && id < 1024);
-	return &synthNodes[id];
+u32 NewAddOperation(Synth* syn, SynthParam left, SynthParam right) {
+	return CreateNode(syn, NodeType::MathAdd, left, right);
+}
+u32 NewSubtractOperation(Synth* syn, SynthParam left, SynthParam right) {
+	return CreateNode(syn, NodeType::MathSubtract, left, right);
+}
+u32 NewMultiplyOperation(Synth* syn, SynthParam left, SynthParam right) {
+	return CreateNode(syn, NodeType::MathMultiply, left, right);
+}
+u32 NewDivideOperation(Synth* syn, SynthParam left, SynthParam right) {
+	return CreateNode(syn, NodeType::MathDivide, left, right);
+}
+u32 NewPowOperation(Synth* syn, SynthParam left, SynthParam right) {
+	return CreateNode(syn, NodeType::MathPow, left, right);
+}
+u32 NewNegateOperation(Synth* syn, SynthParam arg) {
+	return CreateNode(syn, NodeType::MathNegate, arg);
 }
 
-void SetOutputNode(u32 id) {
-	assert(id < nodeCount && id < 1024);
-	outputNode = id;
+u32 NewSynthControl(Synth* syn, const char* name, f32 initialValue) {
+	std::lock_guard<std::mutex>(syn->mutex);
+	syn->controls.push_back({strdup(name), initialValue, initialValue, initialValue, 0.f});
+	return CreateNode(syn, NodeType::InteractionValue, syn->controls.size()-1u);
 }
 
-const char* oscTypeNames[] = {
-	[SYNVALUE] = "Value",
+u32 NewSynthTrigger(Synth* syn, const char* name) {
+	std::lock_guard<std::mutex>(syn->mutex);
+	syn->triggers.push_back({strdup(name), 0});
+	return syn->triggers.size()-1u;
+}
 
-	[SYNSINE] = "Sine",
-	[SYNTRIANGLE] = "Triangle",
-	[SYNSAW] = "Saw",
-	[SYNSQUARE] = "Square",
-	[SYNNOISE] = "Noise",
-
-	[SYNLINEARENV] = "Linear",
-	[SYNARENV] = "AR",
-
-	[SYNTRIGGER] = "Trigger",
-	[SYNCYCLE] = "Cycle",
-
-	[SYNNEG] = "neg",
-
-	[SYNADD] = "+",
-	[SYNSUB] = "-",
-	[SYNMUL] = "*",
-	[SYNDIV] = "/",
-	[SYNPOW] = "^",
-
-	[SYNMIDIKEY] = "MidiKey",
-	[SYNMIDIKEYVEL] = "MidiKeyVel",
-	[SYNMIDIKEYTRIGGER] = "MidiKeyTrigger",
-	[SYNMIDICONTROL] = "MidiCtl",
-
-	[SYNOUTPUT] = "Output",
-};
-
-void DumpSynthNodes() {
-	printf("%u SynthNodes\n", nodeCount);
-	printf("OutputNode: #%d\n", outputNode);
+void SetSynthControl(Synth* syn, const char* name, f32 val, f32 lerpTime) {
+	auto it = std::find_if(syn->controls.begin(), syn->controls.end(), [name](const SynthControl& ctl){
+		return !strcmp(ctl.name, name);
+	});
 	
-	for(u32 i = 0; i < nodeCount; i++) {
-		auto osc = GetSynthNode(i);
-		printf("\t#%-2u %-10s ", i, oscTypeNames[osc->type]);
+	if(it != syn->controls.end()) {
+		std::lock_guard<std::mutex>(syn->mutex);
+		it->begin = it->value;
+		it->target = val;
+		it->lerpTime = lerpTime;
+	}
+}
+void TripSynthTrigger(Synth* syn, const char* name) {
+	auto it = std::find_if(syn->triggers.begin(), syn->triggers.end(), [name](const SynthTrigger& ctl){
+		return !strcmp(ctl.name, name);
+	});
 
-		switch(osc->type) {
-			case SYNVALUE: printf("%f", osc->value); break;
+	if(it != syn->triggers.end()) {
+		std::lock_guard<std::mutex>(syn->mutex);
+		it->state = 1;
+	}
+}
 
-			case SYNSINE:
-			case SYNTRIANGLE:
-			case SYNSAW:
-			case SYNSQUARE:
-				printf("freq(#%d)   phaseoffset(#%d)   duty(#%d)", osc->frequency, osc->phaseOffset, osc->duty);
-				break;
+void UpdateSynthNode(Synth* syn, u32 nodeID);
 
-			case SYNLINEARENV:
-			case SYNARENV:
-				printf("trigger(s#%d)", osc->trigger);
-				break;
-
-			case SYNTRIGGER:
-				printf("trigger(t#%d)", osc->triggerID);
-				break;
-
-			case SYNCYCLE:
-				printf("rate(#%d) [ ", osc->seqrate);
-				for(u32 i = 0; i < osc->seqlength; i++)
-					printf("%d ", osc->sequence[i]);
-				printf("]");
-				break;
-
-			case SYNNEG:
-				printf("operand(#%d)", osc->operand);
-				break;
-
-			case SYNADD:
-			case SYNSUB:
-			case SYNMUL:
-			case SYNDIV:
-			case SYNPOW:
-				printf("left(#%d)   right(#%d)", osc->left, osc->right);
-				break;
-
-			case SYNMIDIKEY:
-			case SYNMIDIKEYVEL:
-			case SYNMIDIKEYTRIGGER:
-				printf("key(k#%hhd)   mode(%hhu)", osc->midiKey, osc->midiKeyMode);
-				break;
-			case SYNMIDICONTROL:
-				printf("ctl(c#%hhu)", osc->midiCtl);
-				break;
-
-			default: break;
-		}
-
-		printf("\n");
+f32 EvaluateSynthNodeInput(Synth* syn, SynthNode* node, u8 input) {
+	if(node->inputTypes&(1<<input)) {
+		u32 nodeID = node->inputs[input].node;
+		UpdateSynthNode(syn, nodeID);
+		return syn->nodes[nodeID].foutput;
 	}
 
-	printf("\n");
+	return node->inputs[input].value;
 }
 
-struct SynthValue {
-	bool variable;
-	union {
-		f32 value;
-		u32 stackPos;
-	};
-
-	SynthValue(u32 sp) : variable{true}, stackPos{sp} {}
-	SynthValue(f32 v = 0.f) : variable{false}, value{v} {}
-};
-
-struct SynthInst {
-	u8 type;
-
-	union {
-		struct {
-			u16 phaseID;
-			SynthValue frequency;
-			SynthValue phaseOffset;
-			SynthValue duty;
-		} osc;
-
-		struct {
-			u16 phaseID;
-			s32 triggerID;
-			SynthValue attack;
-			SynthValue release;
-		} env;
-
-		struct {
-			SynthValue left;
-			SynthValue right;
-		} binary;
-
-		struct {
-			u16 phaseID;
-			SynthValue rate;
-			u32 seqlength;
-			SynthValue* sequence;
-		} cycle;
-
-		SynthValue unary;
-
-		u16 triggerID;
-
-		u8 midiCtl;
-		struct {
-			s8 key;
-			u8 mode;
-		} key;
-	};
-
-	SynthInst(u8 t = 0) : type{t} {}
-};
-
-struct Trigger {
-	enum {
-		StateDefault,
-		StateOff,
-		StateOn,
-		StateOnOff,
-		StateHeld,
-	};
-
-	u8 state;
-};
-
-static f64 phaseBank[1024] = {0};
-static u32 numOscillators = 0;
-
-static std::map<u16, u16> triggerMap{}; // Maps trIds from 1st stage to 2nd to avoid duplicates
-static Trigger triggerBank[1024] = {0};
-static u32 numTriggers = 0;
-static std::mutex triggerMutex;
-
-struct MidiKeyVel {u8 key; f32 vel; f32 freq; Trigger trg;};
-
-static f32 midiControls[256] = {0.f};
-static std::vector<MidiKeyVel> midiKeyStates;
-static std::mutex midiMutex;
-
-static f32 synthStack[1024] = {0};
-static u32 stackPos = 0;
-
-static SynthInst instructions[1024] = {0};
-static u32 numInstructions = 0;
-
-void SetTrigger(u16 triggerID, bool v) {
-	if(triggerID >= numTriggers) return;
-
-	triggerMutex.lock();
-	auto trg = &triggerBank[triggerID];
-
-	if(!v) {
-		if(trg->state == Trigger::StateOn) {
-			trg->state = Trigger::StateOnOff;
-		}else if(trg->state != Trigger::StateOnOff) {
-			trg->state = Trigger::StateOff;
-		}
-
-	}else{
-		switch(trg->state) {
-		case Trigger::StateOnOff: // NOTE: ???
-		case Trigger::StateOn: break;
-		case Trigger::StateHeld: trg->state = Trigger::StateHeld; break;
-
-		case Trigger::StateDefault:
-		case Trigger::StateOff: trg->state = Trigger::StateOn; break;
-		}
-	}
-	triggerMutex.unlock();
+u32 EvaluateTrigger(Synth* syn, SynthNode* node, u8 input) {
+	u32 nodeID = node->inputs[input].node;
+	if(nodeID == ~0u) return 0;
+	return syn->triggers[nodeID].state;
 }
 
-void SetMidiControl(u8 ctl, f32 val) {
-	midiMutex.lock();
-	midiControls[ctl] = std::min(std::max(val, 0.f), 1.f);
-	midiMutex.unlock();
-}
+void UpdateSynthNode(Synth* syn, u32 nodeID) {
+	auto node = &syn->nodes[nodeID];
+	if(node->frameID == syn->frameID) // Already updated
+		return;
 
-void NotifyMidiKey(u8 key, f32 vel) {
-	midiMutex.lock();
-	auto it = std::find_if(midiKeyStates.begin(), midiKeyStates.end(), [key](auto k){return key == k.key;});
-	if(it != midiKeyStates.end()) midiKeyStates.erase(it);
-
-	if(vel > 1.f/127.f) { // note on
-		f32 freq = 440.f * std::pow(2.f, (key-69.f)/12.f);
-		midiKeyStates.push_back({key, vel, freq, {Trigger::StateOnOff}});
-		// TODO: Trigger
-	}
-	midiMutex.unlock();
-}
-
-SynthValue CompileNode(s32 id, f32 def = 0.f) {
-	if(id < 0) return {def};
-
-	auto node = GetSynthNode(id);
+	node->frameID = syn->frameID;
 
 	switch(node->type) {
-	case SYNVALUE:
-		return {node->value};
+		case NodeType::SourceSin: {
+			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
+			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = std::sin(2.0*M_PI*(node->phase+phaseOffset));
+			node->phase += freq * syn->dt;
+		}	break;
+		case NodeType::SourceTri: {
+			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
+			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
+			auto nph = std::fmod((node->phase+phaseOffset), 1.f);
+			node->foutput = (nph <= 0.5f)
+				?(nph-0.25f)*4.f
+				:(0.75f-nph)*4.f;
+			node->phase += freq * syn->dt;
+		}	break;
+		case NodeType::SourceSaw: {
+			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
+			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = std::fmod((node->phase+phaseOffset)*2.f, 2.f)-1.f;
+			node->phase += freq * syn->dt;
+		}	break;
+		case NodeType::SourceSqr: {
+			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
+			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
+			f32 width = EvaluateSynthNodeInput(syn, node, 2);
+			width = clamp(width/2.f, 0.f, 1.f);
+			auto nph = std::fmod((node->phase+phaseOffset), 1.f);
+			node->foutput = (nph < width)? -1.f : 1.f;
+			node->phase += freq * syn->dt;
+		}	break;
+		case NodeType::SourceNoise: {
+			node->foutput = (std::rand() %100000) / 50000.f - 0.5f;
+		}	break;
+		case NodeType::SourceTime: {
+			node->foutput = syn->time;
+		}	break;
 
-	case SYNSINE:
-	case SYNTRIANGLE:
-	case SYNSAW:
-	case SYNSQUARE: {
-		auto freq = CompileNode(node->frequency, 110.f);
-		auto shift = CompileNode(node->phaseOffset, 0.f);
-		auto duty = CompileNode(node->duty, 0.5f);
 
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->osc.phaseID = numOscillators++;
-		inst->osc.frequency = freq;
-		inst->osc.phaseOffset = shift;
-		inst->osc.duty = duty;
-		return {stackPos++};
-	}
+		case NodeType::EnvelopeFade: {
+			f32 duration = EvaluateSynthNodeInput(syn, node, 0);
 
-	case SYNNOISE: {
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->osc.phaseID = numOscillators++;
-		return {stackPos++};
-	}
+			if(EvaluateTrigger(syn, node, 1))
+				node->phase = 0.f;	
 
-	case SYNLINEARENV:
-	case SYNARENV: {
-		auto attack = CompileNode(node->attack, 1.f);
-		auto release = CompileNode(node->release, 1.f);
+			node->foutput = node->phase;
+			node->phase = clamp(node->phase + syn->dt/duration, 0.f, 1.f);
+		}	break;
+		case NodeType::EnvelopeADSR: {
+			f32 attack = EvaluateSynthNodeInput(syn, node, 0);
+			f32 decay = EvaluateSynthNodeInput(syn, node, 1);
+			f32 sustain = EvaluateSynthNodeInput(syn, node, 2);
+			f32 sustainlvl = EvaluateSynthNodeInput(syn, node, 3);
+			f32 release = EvaluateSynthNodeInput(syn, node, 4);
 
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->env.phaseID = numOscillators++;
-		inst->env.attack = attack;
-		inst->env.release = release;
-
-		if(node->trigger >= 1024) {
-			inst->env.triggerID = node->trigger;
-		}else if(node->trigger >= 0) {
-			auto trg = &triggerMap[node->trigger];
-			if(*trg > 0) {
-				inst->env.triggerID = *trg-1;
-			}else{
-				inst->env.triggerID = numTriggers++;
-				*trg = inst->env.triggerID+1;
-			}
-		}else{
-			inst->env.triggerID = -1;
-		}
-
-		return {stackPos++};
-	}
-
-	case SYNTRIGGER: {
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->triggerID = numTriggers++;
-		return {0.f};
-		// TODO: ?????
-	}
-
-	case SYNCYCLE: {
-		auto rate = CompileNode(node->seqrate, 1.f);
-		auto sequence = new SynthValue[node->seqlength];
-		for(u32 i = 0; i < node->seqlength; i++) {
-			sequence[i] = CompileNode(node->sequence[i], 0.f);
-		}
-
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->cycle.phaseID = numOscillators++;
-		inst->cycle.rate = rate;
-		inst->cycle.sequence = sequence;
-		inst->cycle.seqlength = node->seqlength;
-
-		return {stackPos++};
-	}
-
-	case SYNMIDICONTROL: {
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->midiCtl = node->midiCtl;
-		return {stackPos++};
-	}
-
-	case SYNMIDIKEYTRIGGER: {
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->key.key = node->midiKey;
-		inst->key.mode = node->midiKeyMode;
-		return {0.f};
-	}
-
-	case SYNMIDIKEYVEL:
-	case SYNMIDIKEY: {
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->key.key = node->midiKey;
-		inst->key.mode = node->midiKeyMode;
-		return {stackPos++};
-	}
-
-	case SYNADD:
-	case SYNSUB:
-	case SYNMUL:
-	case SYNDIV:
-	case SYNPOW: {
-		auto left = CompileNode(node->left);
-		auto right = CompileNode(node->right);
-
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->binary.left = left;
-		inst->binary.right = right;
-		return {stackPos++};
-	}
-
-	case SYNNEG: {
-		auto val = CompileNode(node->operand);
-		auto inst = &instructions[numInstructions++];
-		inst->type = node->type;
-		inst->unary = val;
-		return {stackPos++};
-	}
-
-	default:
-		return {0.f};
-	}
-}
-
-void CompileSynth() {
-	assert(outputNode >= 0 && outputNode < (s32)nodeCount);
-	stackPos = 0;
-	CompileNode(outputNode);
-	if(numInstructions > 0){
-		instructions[numInstructions++] = SynthInst{SYNOUTPUT};
-	}else{
-		puts("Warning! No instructions generated for synth!");
-	}
-
-	printf("numTriggers: %d\n", numTriggers);
-	printf("numOscillators: %d\n", numOscillators);
-
-	for(u32 tp = 0; tp < numTriggers; tp++) {
-		triggerBank[tp] = {Trigger::StateDefault};
-	}
-
-	for(u32 i = 0; i < nodeCount; i++) {
-		auto n = &synthNodes[i];
-		if(n->type == SYNCYCLE) {
-			delete[] n->sequence;
-			n->sequence = nullptr;
-		}
-	}
-
-	for(u32 i = 0; i < numInstructions; i++) {
-		auto inst = &instructions[i];
-		auto type = inst->type;
-
-		printf("s#%-3d %-10s ", i, oscTypeNames[type]);
-		if(type >= SYNSINE && type <= SYNSQUARE) {
-			printf("phase(b#%d) ", inst->osc.phaseID);
-			if(inst->osc.frequency.variable) {
-				printf("frequency(s#%d) ", inst->osc.frequency.stackPos);
-			}else{
-				printf("frequency(%.2fHz) ", inst->osc.frequency.value);
-			}
-			if(inst->osc.phaseOffset.variable) {
-				printf("phaseOffset(s#%d) ", inst->osc.phaseOffset.stackPos);
-			}else{
-				printf("phaseOffset(%.0f%%) ", inst->osc.phaseOffset.value*100.f);
-			}
-			if(inst->osc.duty.variable) {
-				printf("duty(s#%d) ", inst->osc.duty.stackPos);
-			}else{
-				printf("duty(%.2f%%) ", inst->osc.duty.value*100.f);
-			}
-		}else if(type >= SYNADD && type <= SYNPOW) {
-			if(inst->binary.left.variable) {
-				printf("left(s#%d) ", inst->binary.left.stackPos);
-			}else{
-				printf("left(%.2f) ", inst->binary.left.value);
+			if(EvaluateTrigger(syn, node, 5)){
+				if(node->phase < (attack+decay+sustain+release))
+					node->phase = node->foutput*attack;
+				else
+					node->phase = 0.f;
 			}
 
-			if(inst->binary.right.variable) {
-				printf("right(s#%d) ", inst->binary.right.stackPos);
-			}else{
-				printf("right(%.2f) ", inst->binary.right.value);
-			}			
-		}else if(type >= SYNLINEARENV && type <= SYNARENV) {
-			if(inst->env.attack.variable) {
-				printf("attack(s#%d) ", inst->env.attack.stackPos);
-			}else{
-				printf("attack(%.2fs) ", inst->env.attack.value);
+			f32 phase = node->phase;
+			node->phase += syn->dt;
+
+			if(phase < attack) {
+				node->foutput = phase/attack;
+				break;
+			}
+			phase -= attack;
+			if(phase < decay) {
+				node->foutput = (1.f-phase/decay*(1.f-sustainlvl));
+				break;
+			}
+			phase -= decay;
+			if(phase < sustain) {
+				node->foutput = sustainlvl;
+				break;
+			}
+			phase -= sustain;
+			if(phase < release) {
+				node->foutput = (1.f - phase/release)*sustainlvl;
+				break;
 			}
 
-			if(inst->env.release.variable) {
-				printf("release(s#%d) ", inst->env.release.stackPos);
-			}else{
-				printf("release(%.2fs) ", inst->env.release.value);
-			}
+			node->foutput = 0.f;
+		}	break;
 
-			printf("trigger(t#%d) ", inst->env.triggerID);
+		case NodeType::MathAdd: {
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			f32 b = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = a+b;
+		}	break;
+		case NodeType::MathSubtract: {
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			f32 b = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = a-b;
+		}	break;
+		case NodeType::MathMultiply: {
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			f32 b = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = a*b;
+		}	break;
+		case NodeType::MathDivide: {
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			f32 b = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = a/b;
+		}	break;
+		case NodeType::MathPow: {
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			f32 b = EvaluateSynthNodeInput(syn, node, 1);
+			node->foutput = std::pow(a, b);
+		}	break;
+		case NodeType::MathNegate: {
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			node->foutput = -a;
+		}	break;
 
-		}else if(type == SYNCYCLE) {
-			printf("[ ");
-			for(u32 i = 0; i < inst->cycle.seqlength; i++) {
-				auto& val = inst->cycle.sequence[i];
-				if(val.variable) {
-					printf("s#%d ", val.stackPos);
-				}else{
-					printf("%.2f ", val.value);
-				}
-			}
-			printf("]");
-		}else if(type == SYNMIDICONTROL) {
-			printf("ctl(c#%hhu)", inst->midiCtl);
-		}else if(type == SYNMIDIKEY || type == SYNMIDIKEYVEL) {
-			printf("key(k#%hhu) mode(%hhu)", inst->key.key, inst->key.mode);
-		}
-		printf("\n");
+		case NodeType::InteractionValue: {
+			u32 ctlid = node->inputs[0].node;
+			node->foutput = syn->controls[ctlid].value;
+		}	break;
+
+		default: break;
 	}
-
-	fflush(stdout);
-}
-
-f32 EvalSynthValue(SynthValue val) {
-	if(val.variable) return synthStack[val.stackPos];
-	return val.value;
-}
-
-u8 EvalTrigger(s32 trId) {
-	if(trId < 0) return Trigger::StateOff;
-
-	if(trId >= 1024) {
-		trId -= 1024;
-		s32 mkssize = midiKeyStates.size();
-		s8 key = (s8)trId;
-
-		if(key < 0 && -key <= mkssize){ // Negative are 1-indexed
-			return midiKeyStates[mkssize+key].trg.state;
-		}else if(key >= 0 && key < mkssize){ // Positive are 0-indexed
-			return midiKeyStates[key].trg.state;
-		}
-
-		return Trigger::StateOff;
-	}
-
-	auto trg = &triggerBank[trId];
-	return trg->state;
 }
 
 FMOD_RESULT F_CALLBACK DSPCallback(FMOD_DSP_STATE* dsp_state, 
@@ -622,201 +319,45 @@ FMOD_RESULT F_CALLBACK DSPCallback(FMOD_DSP_STATE* dsp_state,
 
 	assert(*outchannels == 1);
 
-	// FMOD::DSP *thisdsp = (FMOD::DSP *)dsp_state->instance; 
+	auto thisdsp = (FMOD::DSP *)dsp_state->instance; 
 
-	// void* ud = nullptr;
-	// cfmod(thisdsp->getUserData(&ud));
+	Synth* ud = nullptr;
+	cfmod(thisdsp->getUserData((void**)&ud));
+	if(!ud->playing) {
+		for(u32 i = 0; i < length; i++)
+			outbuffer[i] = 0.f;
+
+		return FMOD_OK;
+	}
+
+	std::lock_guard<std::mutex>(ud->mutex);
 
 	s32 samplerate = 0;
 	cfmod(dsp_state->callbacks->getsamplerate(dsp_state, &samplerate));
 	f64 inc = 1.0/samplerate;
-
-	std::lock_guard<std::mutex> triggerLock{triggerMutex};
-	std::lock_guard<std::mutex> midiLock{midiMutex};
-
-	static std::vector<MidiKeyVel> sortedKeyStates;
-	sortedKeyStates = midiKeyStates;
-
-	std::sort(sortedKeyStates.begin(), sortedKeyStates.end(), [](auto k0, auto k1) {
-		return k0.key < k1.key;
-	});
+	ud->dt = inc;
 
 	for(u32 i = 0; i < length; i++){
-		f32 out = 0.f;
+		ud->frameID++;
+		UpdateSynthNode(ud, ud->outputNode);
+		outbuffer[i] = ud->nodes[ud->outputNode].foutput;
+		ud->time += ud->dt;
 
-		stackPos = 0;
-		for(u32 ip = 0; ip < numInstructions; ip++) {
-			auto inst = &instructions[ip];
+		for(auto& t: ud->triggers)
+			t.state = 0;
 
-			switch(inst->type) {
-			case SYNSINE: {
-				auto shift = EvalSynthValue(inst->osc.phaseOffset);
-				synthStack[stackPos++] = Wave::sin(phaseBank[inst->osc.phaseID] + shift);
-				phaseBank[inst->osc.phaseID] += inc * EvalSynthValue(inst->osc.frequency);
-			}	break;
-			case SYNTRIANGLE: {
-				auto shift = EvalSynthValue(inst->osc.phaseOffset);
-				synthStack[stackPos++] = Wave::tri(phaseBank[inst->osc.phaseID] + shift);
-				phaseBank[inst->osc.phaseID] += inc * EvalSynthValue(inst->osc.frequency);
-			}	break;
-			case SYNSAW: {
-				auto shift = EvalSynthValue(inst->osc.phaseOffset);
-				synthStack[stackPos++] = Wave::saw(phaseBank[inst->osc.phaseID] + shift);
-				phaseBank[inst->osc.phaseID] += inc * EvalSynthValue(inst->osc.frequency);
-			}	break;
-			case SYNSQUARE: {
-				auto shift = EvalSynthValue(inst->osc.phaseOffset);
-				auto duty = EvalSynthValue(inst->osc.duty);
-				synthStack[stackPos++] = Wave::sqr(phaseBank[inst->osc.phaseID] + shift, duty);
-				phaseBank[inst->osc.phaseID] += inc * EvalSynthValue(inst->osc.frequency);
-			}	break;
-
-			case SYNNOISE: {
-				synthStack[stackPos++] = Wave::noise(phaseBank[inst->osc.phaseID]);
-				phaseBank[inst->osc.phaseID] += inc;
-			} break;
-
-			case SYNLINEARENV: {
-				auto attack = EvalSynthValue(inst->env.attack);
-
-				if(inst->env.triggerID >= 0) {
-					auto trigger = EvalTrigger(inst->env.triggerID);
-					if(trigger == Trigger::StateOn || trigger == Trigger::StateOnOff) {
-						phaseBank[inst->env.phaseID] = 0.f;
-						
-					}else if(trigger == Trigger::StateDefault) {
-						phaseBank[inst->env.phaseID] = 0.f;
-						attack = infinity;
-					}
-				}
-
-				synthStack[stackPos++] = Env::linear(phaseBank[inst->env.phaseID]);
-				phaseBank[inst->env.phaseID] += inc / attack;
-			} break;
-			case SYNARENV: {
-				auto attack = EvalSynthValue(inst->env.attack);
-				auto release = EvalSynthValue(inst->env.release);
-				auto total = attack+release;
-
-				if(inst->env.triggerID >= 0) {
-					auto trigger = EvalTrigger(inst->env.triggerID);
-					if(trigger == Trigger::StateOn || trigger == Trigger::StateOnOff) {
-						phaseBank[inst->env.phaseID] = 0.f;
-
-					}else if(trigger == Trigger::StateDefault) {
-						phaseBank[inst->env.phaseID] = 0.f;
-						attack = infinity;
-					}
-				}
-
-				synthStack[stackPos++] = Env::ar(phaseBank[inst->env.phaseID], attack/total);
-				phaseBank[inst->env.phaseID] += inc / total;
-			} break;
-
-			case SYNTRIGGER: {
-				// synthStack[stackPos++] = triggerBank[inst->triggerID];
-				// TODO: ?????
-			} break;
-
-			case SYNCYCLE: {
-				auto rate = EvalSynthValue(inst->cycle.rate);
-				auto len = inst->cycle.seqlength;
-				auto& ph = phaseBank[inst->cycle.phaseID];
-				ph = std::fmod(ph, len);
-
-				synthStack[stackPos++] = EvalSynthValue(inst->cycle.sequence[(u32)ph]);
-				ph += inc * rate;
-			} break;
-
-			case SYNMIDICONTROL:
-				synthStack[stackPos++] = midiControls[inst->midiCtl];
-				break;
-			case SYNMIDIKEY: {
-				auto mkssize = (s32)midiKeyStates.size();
-				auto& stateVec = (inst->key.mode)?sortedKeyStates:midiKeyStates;
-				s32 imkey = inst->key.key;
-				if(imkey < 0 && -imkey <= mkssize){ // Negative are 1-indexed
-					synthStack[stackPos++] = stateVec[mkssize+imkey].freq;
-				}else if(imkey >= 0 && imkey < mkssize){ // Positive are 0-indexed
-					synthStack[stackPos++] = stateVec[imkey].freq;
-				}else{
-					synthStack[stackPos++] = 0.f;
-				}
-			}	break;
-			case SYNMIDIKEYVEL: {
-				auto mkssize = (s32)midiKeyStates.size();
-				auto& stateVec = (inst->key.mode)?sortedKeyStates:midiKeyStates;
-				s32 imkey = inst->key.key;
-				if(imkey < 0 && -imkey <= mkssize){ // Negative are 1-indexed
-					synthStack[stackPos++] = stateVec[mkssize+imkey].vel;
-				}else if(imkey >= 0 && imkey < mkssize){ // Positive are 0-indexed
-					synthStack[stackPos++] = stateVec[imkey].vel;
-				}else{
-					synthStack[stackPos++] = 0.f;
-				}
-			}	break;
-
-			case SYNNEG:
-				synthStack[stackPos++] = -EvalSynthValue(inst->binary.left);
-				break;
-			case SYNADD:
-				synthStack[stackPos++] = EvalSynthValue(inst->binary.left) + EvalSynthValue(inst->binary.right);
-				break;
-			case SYNSUB:
-				synthStack[stackPos++] = EvalSynthValue(inst->binary.left) - EvalSynthValue(inst->binary.right);
-				break;
-			case SYNMUL:
-				synthStack[stackPos++] = EvalSynthValue(inst->binary.left) * EvalSynthValue(inst->binary.right);
-				break;
-			case SYNDIV:
-				synthStack[stackPos++] = EvalSynthValue(inst->binary.left) / EvalSynthValue(inst->binary.right);
-				break;
-			case SYNPOW:
-				synthStack[stackPos++] = std::pow(EvalSynthValue(inst->binary.left), EvalSynthValue(inst->binary.right));
-				break;
-
-			case SYNOUTPUT:
-				out = synthStack[--stackPos];
-				goto go;
-
-			default: break;
+		for(auto& c: ud->controls){
+			f32 span = c.target-c.begin;
+			if(c.lerpTime < 1e-6 || std::abs(span) < 1e-6) {
+				c.value = c.target;
+				continue;
 			}
-		}
 
-		go:
-		// constexpr u32 delaySize = 48000*4;
-		// static f32 delayline[delaySize] {0.f};
-		// static u32 delayPos = 0;
-		// static auto sample = [](u32 x) {
-		// 	return delayline[(delayPos-x+delaySize)%delaySize];
-		// };
-
-		// http://msp.ucsd.edu/techniques/v0.11/book-html/node111.html
-		// http://www.cs.ust.hk/mjg_lib/bibs/DPSu/DPSu.Files/Ga95.PDF 
-		// http://www.earlevel.com/main/1997/01/19/a-bit-about-reverb/
-		// https://ccrma.stanford.edu/~jos/pasp/Artificial_Reverberation.html
-
-		// out += (sample(1300*48) + sample(700*48))/2.f;
-		// delayline[delayPos] = out * 0.1f;
-		// delayPos = (delayPos+1)%delaySize;
-		
-		outbuffer[i] = out;
-
-		for(u32 tp = 0; tp < numTriggers; tp++) {
-			auto trg = &triggerBank[tp];
-
-			if(trg->state == Trigger::StateOn) {
-				trg->state = Trigger::StateHeld;
-			}else if(trg->state == Trigger::StateOnOff) {
-				trg->state = Trigger::StateOff;
-			}
-		}
-
-		for(auto& k: midiKeyStates) {
-			if(k.trg.state == Trigger::StateOn) {
-				k.trg.state = Trigger::StateHeld;
-			}else if(k.trg.state == Trigger::StateOnOff) {
-				k.trg.state = Trigger::StateOff;
+			f32 a = (c.value-c.begin)/span;
+			if(a < 1.f) {
+				c.value += span/c.lerpTime*ud->dt;
+			}else if (a > 1.f) {
+				c.value = c.target;
 			}
 		}
 	}
@@ -824,7 +365,7 @@ FMOD_RESULT F_CALLBACK DSPCallback(FMOD_DSP_STATE* dsp_state,
 	return FMOD_OK;
 }
 
-void InitAudio(){
+bool InitAudio(){
 	cfmod(FMOD::System_Create(&fmodSystem));
 
 	u32 version = 0;
@@ -836,55 +377,38 @@ void InitAudio(){
 
 	cfmod(fmodSystem->init(10, FMOD_INIT_NORMAL, nullptr));
 
-	FMOD::DSP* dsp;
 	FMOD::DSP* compressor;
-
-	{	FMOD_DSP_DESCRIPTION desc;
-		memset(&desc, 0, sizeof(desc));
-
-		desc.numinputbuffers = 0;
-		desc.numoutputbuffers = 1;
-		desc.read = DSPCallback;
-
-		cfmod(fmodSystem->createDSP(&desc, &dsp));
-		cfmod(dsp->setChannelFormat(FMOD_CHANNELMASK_MONO,1,FMOD_SPEAKERMODE_MONO));
-	}
-
 	cfmod(fmodSystem->createDSPByType(FMOD_DSP_TYPE_COMPRESSOR, &compressor));
-
 	cfmod(compressor->setParameterFloat(FMOD_DSP_COMPRESSOR_THRESHOLD, -15));
 	cfmod(compressor->setParameterFloat(FMOD_DSP_COMPRESSOR_ATTACK, 1));
 	cfmod(compressor->setParameterFloat(FMOD_DSP_COMPRESSOR_RELEASE, 200));
 	cfmod(compressor->setBypass(false));
-	cfmod(dsp->setBypass(false));
 
 	FMOD::ChannelGroup* mastergroup;
 	cfmod(fmodSystem->getMasterChannelGroup(&mastergroup));
 	cfmod(mastergroup->addDSP(0, compressor));
-	cfmod(fmodSystem->playDSP(dsp, mastergroup, false, &channel));
-	cfmod(channel->setMode(FMOD_2D));
-	cfmod(channel->setVolume(0.7f));
 
 	// http://www.fmod.org/docs/content/generated/FMOD_REVERB_PROPERTIES.html
+	// FMOD_REVERB_PROPERTIES rprops = {
+	// 	.DecayTime			= 12000.0, //1500.0, /* Reverberation decay time in ms */
+	// 	.EarlyDelay			= 7.0, //7.0, /* Initial reflection delay time */
+	// 	.LateDelay			= 11.0, //11.0, /* Late reverberation delay time relative to initial reflection */
+	// 	.HFReference		= 5000.0, /* Reference high frequency (hz) */
+	// 	.HFDecayRatio		= 50.0, /* High-frequency to mid-frequency decay time ratio */
+	// 	.Diffusion			= 100.0, // Value that controls the echo density in the late reverberation decay. 
+	// 	.Density			= 100.0, //100.0, /* Value that controls the modal density in the late reverberation decay */
+	// 	.LowShelfFrequency	= 250.0, /* Reference low frequency (hz) */
+	// 	.LowShelfGain		= 0.0, /* Relative room effect level at low frequencies */
+	// 	.HighCut			= 10000.0, /* Relative room effect level at high frequencies */
+	// 	.EarlyLateMix		= 50.0, /* Early reflections level relative to room effect */
+	// 	.WetLevel			= -4.0, //-6.0, /* Room effect level (at mid frequencies) */
+	// };
 
-	FMOD_REVERB_PROPERTIES rprops = {
-		.DecayTime			= 12000.0, //1500.0, /* Reverberation decay time in ms */
-		.EarlyDelay			= 7.0, //7.0, /* Initial reflection delay time */
-		.LateDelay			= 11.0, //11.0, /* Late reverberation delay time relative to initial reflection */
-		.HFReference		= 5000.0, /* Reference high frequency (hz) */
-		.HFDecayRatio		= 50.0, /* High-frequency to mid-frequency decay time ratio */
-		.Diffusion			= 100.0, /* Value that controls the echo density in the late reverberation decay. */
-		.Density			= 100.0, //100.0, /* Value that controls the modal density in the late reverberation decay */
-		.LowShelfFrequency	= 250.0, /* Reference low frequency (hz) */
-		.LowShelfGain		= 0.0, /* Relative room effect level at low frequencies */
-		.HighCut			= 10000.0, /* Relative room effect level at high frequencies */
-		.EarlyLateMix		= 50.0, /* Early reflections level relative to room effect */
-		.WetLevel			= -4.0, //-6.0, /* Room effect level (at mid frequencies) */
-	};
+	// FMOD::Reverb3D* reverb;
+	// cfmod(fmodSystem->createReverb3D(&reverb));
+	// cfmod(reverb->setProperties(&rprops));
 
-	FMOD::Reverb3D* reverb;
-	cfmod(fmodSystem->createReverb3D(&reverb));
-	cfmod(reverb->setProperties(&rprops));
+	return true;
 }
 
 void DeinitAudio() {

@@ -1,6 +1,6 @@
 #include "common.h"
+// #include "oldaudio.h"
 #include "audio.h"
-#include "midi.h"
 #include "lib.h"
 
 #include <SDL2/SDL.h>
@@ -17,21 +17,24 @@ int main(){
 		return 1;
 	}
 
-	InitMidi();
-	InitLua();
+	if(!InitLua()) {
+		puts("Lua init failed!");
+		return 1;
+	}
 
 	extern LuaState l;
-	if(luaL_dofile(l, "main.lua")){
+
+	if(!InitAudio()) {
+		puts("Audio init failed!");
+		return 1;
+	}
+
+	if(luaL_dofile(l, "new.lua")){
 		puts(lua_tostring(l, -1));
 		lua_pop(l, 1);
 	}
-
-	DumpSynthNodes();
-	CompileSynth();
-
-	InitAudio();
-
-	std::vector<std::pair<u8, u8>> keyStack;
+	
+	auto synth = GetSynth(0);
 
 	bool running = true;
 	while(running){
@@ -45,46 +48,21 @@ int main(){
 
 			if(e.type == SDL_KEYDOWN && e.key.repeat == 0) {
 				auto k = e.key.keysym.sym;
-				if(k == SDLK_SPACE) {
-					SetTrigger(0, true);
-				}else if(k == SDLK_a) {
-					SetTrigger(1, true);
-				}else if(k == SDLK_d) {
-					SetTrigger(2, true);
+				if(k == SDLK_SPACE){
+					// static f32 freqs[] {1./3.f, 1.f/2.f, 1.f, 2.f/3.f, 3.f/2.f, 4.f/5.f, 9.f/8.f};
+					// SetSynthControl(synth, "freq", freqs[rand()%sizeof(freqs)/4]*220.f);
+					TripSynthTrigger(synth, "env");
 				}
-
-			}else if(e.type == SDL_KEYUP) {
-				auto k = e.key.keysym.sym;
-				if(k == SDLK_SPACE) {
-					SetTrigger(0, false);
-				}else if(k == SDLK_a) {
-					SetTrigger(1, false);
-				}else if(k == SDLK_d) {
-					SetTrigger(2, false);
-				}
-			}
-		}
-
-		while(auto m = GetMidiMessage()) {
-			switch(m.type) {
-				case MidiMessage::Control:
-					SetMidiControl(m.b0, m.b1/127.f);
-					break;
-
-				case MidiMessage::Note:
-					NotifyMidiKey(m.b0, m.b1/127.f);
-					break;
-
-				default: break;
 			}
 		}
 
 		UpdateAudio();
 
+		luaL_dostring(l, "update()");
+
 		SDL_Delay(1);
 	}
 
-	DeinitMidi();
 	DeinitAudio();
 	SDL_Quit();
 

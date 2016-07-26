@@ -7,7 +7,7 @@
 using LuaState = lua_State*;
 using LibraryType = const luaL_Reg[];
 
-void InitLua();
+bool InitLua();
 
 void stackdump();
 

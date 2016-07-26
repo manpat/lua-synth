@@ -2,144 +2,165 @@
 #define AUDIO_H
 
 #include "common.h"
+#include <vector>
+#include <mutex>
 
-#include <fmod.hpp>
-#include <fmod_errors.h>
+enum class NodeType : u8 {
+	SourceSin,
+	SourceTri,
+	SourceSqr,
+	SourceSaw,
+	SourceNoise,
+	SourceSampler, // TODO
+	SourceTime,
 
-template<class F1, class F2, class F3>
-F1 clamp(F1 v, F2 mn, F3 mx) {
-	return std::max(std::min(v, (F1)mx), (F1)mn);
-}
+	MathAdd,
+	MathSubtract,
+	MathMultiply,
+	MathDivide,
+	MathPow,
+	MathNegate,
 
-template<class F1, class F2, class F3>
-decltype(F1{}+F2{}) mix(F1 v1, F2 v2, F3 a) {
-	using RetType = decltype(F1{}+F2{});
+	EnvelopeFade,
+	EnvelopeADSR,
 
-	return (RetType)(v1 * (1-a) + v2 * a);
-}
+	EffectsConvolution,
+	EffectsLowPass,
+	EffectsHighPass,
 
-// Returns frequency of note offset from A
-constexpr f32 ntof(f32 n){
-	return 220.f * std::pow(2.f, n/12.f);
-}
+	InteractionValue,
+	// InteractionTrigger,
+};
 
-namespace Wave {
-	f32 sin(f64 phase);
-	f32 saw(f64 phase);
-	f32 sqr(f64 phase, f64 width = 0.5);
-	f32 tri(f64 phase);
-	f32 noise(f64 phase);
-}
+union SynthInput {
+	f32 value;
+	u32 node;
 
-namespace Env {
-	f32 linear(f32 phase);
-	f32 exp(f32 phase);
-	f32 ar(f32 phase, f32 turn = 0.5f);
-	f32 ear(f32 phase, f32 turn = 0.5f);
-}
-
-
-void InitAudio();
-void DeinitAudio();
-
-void UpdateAudio();
-
-enum {
-	SYNVALUE,
-	
-	SYNSINE,
-	SYNTRIANGLE,
-	SYNSAW,
-	SYNSQUARE,
-	SYNNOISE,
-
-	SYNLINEARENV,
-	SYNARENV,
-
-	SYNTRIGGER,
-	SYNCYCLE,
-
-	SYNNEG,
-
-	SYNADD,
-	SYNSUB,
-	SYNMUL,
-	SYNDIV,
-	SYNPOW,
-
-	SYNMIDIKEY,
-	SYNMIDIKEYVEL,
-	SYNMIDIKEYTRIGGER,
-	SYNMIDICONTROL,
-
-	SYNOUTPUT,
-
-	SYNCOUNT
+	SynthInput() : node{0} {}
+	SynthInput(f32 x) : value{x} {}
+	SynthInput(f64 x) : value{f32(x)} {}
+	SynthInput(u32 x) : node{x} {}
+	SynthInput(s32 x) : node{u32(x)} {}
 };
 
 struct SynthNode {
-	u32 id;
-	u8 type;
+	u32 frameID;
+	// u8 numReferences;
+	NodeType type;
+
+	u8 inputTypes;
+	SynthInput inputs[8];
+
+	f64 phase;
 
 	union {
-		// Wave
-		struct {
-			s32 frequency;
-			s32 phaseOffset;
-			s32 duty;
-		};
-	
-		// Value
-		f32 value;
-
-		// Binary Op
-		struct {
-			s32 left;
-			s32 right;
-		};
-
-		// Unary
-		s32 operand;
-
-		// Env
-		struct {
-			s32 trigger;
-			s32 attack;
-			s32 release;
-		};
-
-		// Cycle
-		struct {
-			s32 seqrate;
-			u32 seqlength;
-			s32* sequence;
-		};
-
-		u8 midiCtl;
-		struct {
-			s8 midiKey;
-			u8 midiKeyMode;
-		};
-
-		u16 triggerID;
+		f32 foutput;
+		u32 uoutput;
 	};
 
-	SynthNode() {}
-	~SynthNode() {}
+	SynthNode() {memset(this, 0, sizeof(SynthNode));}
 };
 
-SynthNode* NewSynthNode(u8);
-u32 NewValue(f32 value);
-SynthNode* GetSynthNode(u32);
+struct SynthControl {
+	const char* name;
+	f32 value;
+	
+	f32 begin;
+	f32 target;
+	f32 lerpTime;
+};
 
-void SetOutputNode(u32);
+struct SynthTrigger {
+	const char* name;
+	u32 state;
+};
 
-void DumpSynthNodes();
-void CompileSynth();
+struct Synth {
+	std::mutex mutex;
+	std::vector<SynthNode> nodes;
+	std::vector<SynthControl> controls;
+	std::vector<SynthTrigger> triggers;
+	u32 outputNode;
+	u32 frameID;
+	f64 dt;
+	f32 time;
+	bool playing;
+};
 
-void SetTrigger(u16, bool);
-void SetMidiControl(u8, f32);
-// void SetMidiKey(f32 freq, f32 vel);
-void NotifyMidiKey(u8 key, f32 vel);
+struct SynthParam {
+	bool isNode;
+	union {
+		f32 value;
+		u32 node;
+	};
+
+	SynthParam(bool x, u32 n) : isNode{x}, node{n} {}
+	SynthParam(f32 x) : isNode{false}, value{x} {}
+	SynthParam(f64 x) : isNode{false}, value{f32(x)} {}
+	SynthParam(u32 x) : isNode{true}, node{x} {}
+	SynthParam(u64 x) : isNode{true}, node{u32(x)} {}
+};
+
+bool InitAudio();
+void DeinitAudio();
+void UpdateAudio();
+
+Synth* CreateSynth();
+Synth* GetSynth(u32);
+
+u32 NewSinOscillator(Synth*, SynthParam freq, SynthParam phaseOffset = {0.f});
+u32 NewTriOscillator(Synth*, SynthParam freq, SynthParam phaseOffset = {0.f});
+u32 NewSqrOscillator(Synth*, SynthParam freq, SynthParam phaseOffset = {0.f}, SynthParam duty = {1.f}); // duty: [0, 1] -> [0%, 50%]
+u32 NewSawOscillator(Synth*, SynthParam freq, SynthParam phaseOffset = {0.f});
+u32 NewNoiseSource(Synth*);
+u32 NewTimeSource(Synth*);
+
+u32 NewFadeEnvelope(Synth*, SynthParam duration, u32 trigger = ~0u);
+u32 NewADSREnvelope(Synth*, SynthParam attack, SynthParam decay, SynthParam sustain, SynthParam sustainlvl, SynthParam release, u32 trigger = ~0u);
+
+u32 NewAddOperation(Synth*, SynthParam left, SynthParam right);
+u32 NewSubtractOperation(Synth*, SynthParam left, SynthParam right);
+u32 NewMultiplyOperation(Synth*, SynthParam left, SynthParam right);
+u32 NewDivideOperation(Synth*, SynthParam left, SynthParam right);
+u32 NewPowOperation(Synth*, SynthParam left, SynthParam right);
+u32 NewNegateOperation(Synth*, SynthParam arg);
+
+u32 NewSynthControl(Synth*, const char*, f32 initialValue = 0.f);
+u32 NewSynthTrigger(Synth*, const char*);
+
+void SetSynthControl(Synth*, const char*, f32, f32 = 0.f);
+void TripSynthTrigger(Synth*, const char*);
+
+// Sources
+// 	- Oscillators (Sin, saw, sqr, tri)
+// 		- input: frequency, phase offset, duty
+//		- output: value
+// 	- Noise
+// 		- output: value
+//  - Sampler?
+// 		- invariant: filename
+//		- input: position/phase, loop, ...
+// 		- output: value
+//	- Time
+// 		- output: value
+
+// Envelopes
+// 	- FadeIn, FadeOut
+// 	- ADSR
+// 		- input: attack, sustain, sustain lvl, release
+//		- triggers: restart
+// 		- output: value
+
+// Effects
+// 	- Convolution
+// 	- LowPass, HighPass, BandPass
+
+// Interaction
+// 	- Triggers
+// 		- invariant: name
+// 		- output: trigger
+// 	- Values
+// 		- invariant: name, lerpable
+// 		- output: value
 
 #endif

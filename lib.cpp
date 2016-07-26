@@ -6,324 +6,271 @@
 
 LuaState l;
 
-LUAFUNC(oscToString);
-LUAFUNC(seqCycles);
+struct LuaSynthNode {
+	Synth* synth;
+	bool isNode;
+	union {
+		u32 node;
+		f32 value;
+	};
 
-LUAFUNC(modTrigger);
-LUAFUNC(modShift);
-LUAFUNC(modDuty);
+	operator SynthParam() const {
+		return SynthParam{isNode, node};
+	}
+};
 
-s32 PushLuaSynthNode(LuaState l, SynthNode* node);
-SynthNode* NewLuaSynthNode(LuaState l, u8 type);
-s32 GetSynthNodeArg(LuaState l, u32 a);
+struct LuaTrigger {
+	Synth* synth;
+	u32 trigger;
+};
 
-void InitLua() {
+s32 PushLuaSynthNode(Synth* s, u32 node) {
+	*(LuaSynthNode*) lua_newuserdata(l, sizeof(LuaSynthNode)) = {s, true, node};
+	luaL_setmetatable(l, "nodemt");
+	return 1;
+}
+
+s32 PushLuaSynthTrigger(Synth* s, u32 trigger) {
+	*(LuaTrigger*) lua_newuserdata(l, sizeof(LuaTrigger)) = {s, trigger};
+	luaL_setmetatable(l, "triggermt");
+	return 1;
+}
+
+Synth* GetSynthArg(u32 a) {
+	return *(Synth**)luaL_checkudata(l, a, "synthmt");
+}
+
+LuaTrigger* GetSynthTriggerArg(u32 a) {
+	return (LuaTrigger*)luaL_testudata(l, a, "triggermt");
+}
+
+u32 GetSynthTriggerID(u32 a) {
+	if(auto trg = (LuaTrigger*)luaL_testudata(l, a, "triggermt"))
+		return trg->trigger;
+
+	return ~0u;
+}
+
+LuaSynthNode GetSynthNodeArg(u32 a, f32 def = 0.f) {
+	LuaSynthNode n {nullptr, false, 0};
+	if(lua_isnumber(l, a)) {
+		n.value = lua_tonumber(l, a);
+		return n;
+	}else if(auto node = (LuaSynthNode*)luaL_testudata(l, a, "nodemt")) {
+		return *node;
+	}
+
+	n.value = def;
+	return n;
+}
+
+bool InitLua() {
 	l = luaL_newstate();
 	if(!l) {
 		puts("Lua context acquisition failed");
-		return;
+		return false;
 	}
 
 	luaL_openlibs(l);
 
-	static LibraryType osclib = {
+	static LibraryType synthLib = {
+		{"new", LUALAMBDA {
+			auto synth = CreateSynth();
+			*(Synth**) lua_newuserdata(l, sizeof(Synth*)) = synth;
+			luaL_setmetatable(l, "synthmt");
+			return 1;
+		}},
+		{nullptr, nullptr}
+	};
+
+	static LibraryType synthOPS = {
 		{"output", LUALAMBDA {
-			SetOutputNode(*(u32*) luaL_checkudata(l, 1, "OscMT"));
+			auto s = GetSynthArg(1);
+			auto f = GetSynthNodeArg(2);
+			if(f.isNode) {
+				s->outputNode = f.node;
+				s->playing = true;
+			}
 			return 0;
 		}},
+
+		{"setvalue", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto name = luaL_checkstring(l, 2);
+			f32 v = luaL_checknumber(l, 3);
+			SetSynthControl(s, name, v);
+			return 0;
+		}},
+		// {"triptrigger", LUALAMBDA {
+		// 	auto s = GetSynthArg(1);
+		// 	auto name = luaL_checkstring(l, 2);
+		// 	TripSynthTrigger(s, name);
+		// 	return 0;
+		// }},
+
 		{"sin", LUALAMBDA {
-			auto osc = NewSynthNode(SYNSINE);
-			osc->frequency = GetSynthNodeArg(l, 1);
-			return PushLuaSynthNode(l, osc);
+			auto s = GetSynthArg(1);
+			auto f = GetSynthNodeArg(2);
+			auto p = GetSynthNodeArg(3);
+			return PushLuaSynthNode(s, NewSinOscillator(s, f, p));
 		}},
 		{"tri", LUALAMBDA {
-			auto osc = NewSynthNode(SYNTRIANGLE);
-			osc->frequency = GetSynthNodeArg(l, 1);
-			return PushLuaSynthNode(l, osc);
-		}},
-		{"saw", LUALAMBDA {
-			auto osc = NewSynthNode(SYNSAW);
-			osc->frequency = GetSynthNodeArg(l, 1);
-			return PushLuaSynthNode(l, osc);
+			auto s = GetSynthArg(1);
+			auto f = GetSynthNodeArg(2);
+			auto p = GetSynthNodeArg(3);
+			return PushLuaSynthNode(s, NewTriOscillator(s, f, p));
 		}},
 		{"sqr", LUALAMBDA {
-			auto osc = NewSynthNode(SYNSQUARE);
-			osc->frequency = GetSynthNodeArg(l, 1);
-			osc->duty = GetSynthNodeArg(l, 2);
-			return PushLuaSynthNode(l, osc);
+			auto s = GetSynthArg(1);
+			auto f = GetSynthNodeArg(2);
+			auto d = GetSynthNodeArg(3, 1.f);
+			auto p = GetSynthNodeArg(4);
+			return PushLuaSynthNode(s, NewSqrOscillator(s, f, p, d));
+		}},
+		{"saw", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto f = GetSynthNodeArg(2);
+			auto p = GetSynthNodeArg(3);
+			return PushLuaSynthNode(s, NewSawOscillator(s, f, p));
 		}},
 		{"noise", LUALAMBDA {
-			NewLuaSynthNode(l, SYNNOISE);
-			return 1;
+			auto s = GetSynthArg(1);
+			return PushLuaSynthNode(s, NewNoiseSource(s));
+		}},
+		{"time", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			return PushLuaSynthNode(s, NewTimeSource(s));
 		}},
 
-		{0,0}
-	};
+		{"fade", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto f = GetSynthNodeArg(2);
+			u32 trg = GetSynthTriggerID(3);
+			return PushLuaSynthNode(s, NewFadeEnvelope(s, f, trg));
+		}},
+		{"ar", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto a = GetSynthNodeArg(2);
+			auto r = GetSynthNodeArg(3);
+			u32 trg = GetSynthTriggerID(4);
+			return PushLuaSynthNode(s, NewADSREnvelope(s, a, 0.f, 0.f, 1.f, r, trg));
+		}},
 
-	static LibraryType envlib = {
+		{"value", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto name = luaL_checkstring(l, 2);
+			f32 def = luaL_optnumber(l, 3, 0.f);
+			return PushLuaSynthNode(s, NewSynthControl(s, name, def));
+		}},
 		{"trigger", LUALAMBDA {
-			NewLuaSynthNode(l, SYNTRIGGER);
-			return 1;
+			auto s = GetSynthArg(1);
+			auto name = luaL_checkstring(l, 2);
+			return PushLuaSynthTrigger(s, NewSynthTrigger(s, name));
 		}},
-		{"linear", LUALAMBDA {
-			if(lua_gettop(l) < 1) return 0;
-			auto env = NewLuaSynthNode(l, SYNLINEARENV);
-			env->attack = GetSynthNodeArg(l, 1);
-			return 1;
-		}},
-		{"ar", LUALAMBDA { 
-			if(lua_gettop(l) < 2) return 0;
-			auto env = NewLuaSynthNode(l, SYNARENV);
-			env->attack = GetSynthNodeArg(l, 1);
-			env->release = GetSynthNodeArg(l, 2);
-			return 1;
-		}},
-		{0,0}
+		{nullptr, nullptr}
 	};
 
-	static LibraryType opslib = {
-		{"__tostring", oscToString},
+	static LibraryType nodeMT = {
 		{"__add", LUALAMBDA {
-			auto osc = NewSynthNode(SYNADD);
-			osc->left = GetSynthNodeArg(l, 1);
-			osc->right = GetSynthNodeArg(l, 2);
-			return PushLuaSynthNode(l, osc);
+			auto left = GetSynthNodeArg(1);
+			auto right = GetSynthNodeArg(2);
+			auto s = left.synth?left.synth:right.synth;
+			assert(s && ((left.synth == right.synth) || !left.synth || !right.synth));
+			return PushLuaSynthNode(s, NewAddOperation(s, left, right));
 		}},
 
 		{"__sub", LUALAMBDA {
-			auto osc = NewSynthNode(SYNSUB);
-			osc->left = GetSynthNodeArg(l, 1);
-			osc->right = GetSynthNodeArg(l, 2);
-			return PushLuaSynthNode(l, osc);
+			auto left = GetSynthNodeArg(1);
+			auto right = GetSynthNodeArg(2);
+			auto s = left.synth?left.synth:right.synth;
+			assert(s && ((left.synth == right.synth) || !left.synth || !right.synth));
+			return PushLuaSynthNode(s, NewSubtractOperation(s, left, right));
 		}},
 
 		{"__mul", LUALAMBDA {
-			auto osc = NewSynthNode(SYNMUL);
-			osc->left = GetSynthNodeArg(l, 1);
-			osc->right = GetSynthNodeArg(l, 2);
-			return PushLuaSynthNode(l, osc);
+			auto left = GetSynthNodeArg(1);
+			auto right = GetSynthNodeArg(2);
+			auto s = left.synth?left.synth:right.synth;
+			assert(s && ((left.synth == right.synth) || !left.synth || !right.synth));
+			return PushLuaSynthNode(s, NewMultiplyOperation(s, left, right));
 		}},
 
 		{"__div", LUALAMBDA {
-			auto osc = NewSynthNode(SYNDIV);
-			osc->left = GetSynthNodeArg(l, 1);
-			osc->right = GetSynthNodeArg(l, 2);
-			return PushLuaSynthNode(l, osc);
+			auto left = GetSynthNodeArg(1);
+			auto right = GetSynthNodeArg(2);
+			auto s = left.synth?left.synth:right.synth;
+			assert(s && ((left.synth == right.synth) || !left.synth || !right.synth));
+			return PushLuaSynthNode(s, NewDivideOperation(s, left, right));
 		}},
 
 		{"__pow", LUALAMBDA {
-			auto osc = NewSynthNode(SYNPOW);
-			osc->left = GetSynthNodeArg(l, 1);
-			osc->right = GetSynthNodeArg(l, 2);
-			return PushLuaSynthNode(l, osc);
+			auto left = GetSynthNodeArg(1);
+			auto right = GetSynthNodeArg(2);
+			auto s = left.synth?left.synth:right.synth;
+			assert(s && ((left.synth == right.synth) || !left.synth || !right.synth));
+			return PushLuaSynthNode(s, NewPowOperation(s, left, right));
 		}},
 
 		{"__unm", LUALAMBDA {
-			auto osc = NewSynthNode(SYNNEG);
-			osc->operand = GetSynthNodeArg(l, 1);
-			return PushLuaSynthNode(l, osc);
+			auto a = GetSynthNodeArg(1);
+			auto s = a.synth;
+			assert(s);
+			return PushLuaSynthNode(s, NewNegateOperation(s, a));
 		}},
-
-		{0,0}
+		{nullptr, nullptr}
 	};
 
-	static LibraryType seqlib = {
-		{"cycle", seqCycles},
-		{0,0}
+	static LibraryType nodeLib = {
+		{"set", LUALAMBDA {
+			auto a = GetSynthNodeArg(1);
+			if(a.isNode) {
+				// TODO: Safety
+				auto node = &a.synth->controls[a.node];
+				f32 v = luaL_checknumber(l, 2);
+				f32 lerpTime = luaL_optnumber(l, 3, 0.f);
+				SetSynthControl(a.synth, node->name, v, lerpTime);
+			}
+			return 0;
+		}},
+
+		{nullptr, nullptr}
 	};
 
-	static LibraryType modlib = {
-		{"trigger", modTrigger},
-		{"shift", modShift},
-		{"duty", modDuty},
-		{0,0}
+	static LibraryType triggerMT = {
+		{nullptr, nullptr}
 	};
 
-	static LibraryType midilib = {
-		{"ctl", LUALAMBDA {
-			auto o = NewSynthNode(SYNMIDICONTROL);
-			o->midiCtl = (u8) luaL_checkunsigned(l, 1);
-			return PushLuaSynthNode(l, o);
+	static LibraryType triggerLib = {
+		{"trigger", LUALAMBDA {
+			// TODO: Safety
+			auto a = GetSynthTriggerArg(1);
+			assert(a);
+			auto trg = &a->synth->triggers[a->trigger];
+			TripSynthTrigger(a->synth, trg->name);
+			return 0;
 		}},
-		{"key", LUALAMBDA {
-			auto o = NewSynthNode(SYNMIDIKEY);
-			o->midiKey = (s8) luaL_optinteger(l, 1, -1);
-			o->midiKeyMode = (u8) luaL_optinteger(l, 2, 0);
-			return PushLuaSynthNode(l, o);
-		}},
-		{"vel", LUALAMBDA {
-			auto o = NewSynthNode(SYNMIDIKEYVEL);
-			o->midiKey = (s8) luaL_optinteger(l, 1, -1);
-			o->midiKeyMode = (u8) luaL_optinteger(l, 2, 0);
-			return PushLuaSynthNode(l, o);
-		}},
-		{"trg", LUALAMBDA {
-			auto o = NewSynthNode(SYNMIDIKEYTRIGGER);
-			o->midiKey = (s8) luaL_optinteger(l, 1, -1);
-			o->midiKeyMode = (u8) luaL_optinteger(l, 2, 0);
-			return PushLuaSynthNode(l, o);
-		}},
-		{0,0}
+
+		{nullptr, nullptr}
 	};
 
-	luaL_newlib(l, osclib);
-	lua_setglobal(l, "osc");
+	luaL_newlib(l, synthLib);
+	lua_setglobal(l, "synth");
 
-	luaL_newlib(l, envlib);
-	lua_setglobal(l, "env");
-
-	luaL_newlib(l, midilib);
-	lua_setglobal(l, "midi");
-
-	luaL_newlib(l, seqlib);
-	lua_setglobal(l, "seq");
-
-	luaL_newmetatable(l, "OscMT");
-	luaL_setfuncs(l, opslib, 0);
-
-	// Modifiers
-	luaL_newlib(l, modlib);
+	luaL_newmetatable(l, "synthmt");
+	luaL_newlib(l, synthOPS);
 	lua_setfield(l, -2, "__index");
-}
 
-s32 GetSynthNodeArg(LuaState l, u32 a) {
-	if(lua_isnumber(l, a)) {
-		return NewValue(lua_tonumber(l, a));
+	luaL_newmetatable(l, "nodemt");
+	luaL_setfuncs(l, nodeMT, 0);
+	luaL_newlib(l, nodeLib);
+	lua_setfield(l, -2, "__index");
 
-	}else if(auto osc = (u32*)luaL_testudata(l, a, "OscMT")) {
-		return *osc;
-	}
+	luaL_newmetatable(l, "triggermt");
+	luaL_setfuncs(l, triggerMT, 0);
+	luaL_newlib(l, triggerLib);
+	lua_setfield(l, -2, "__index");
 
-	return -1;
-}
-
-s32 PushLuaSynthNode(LuaState l, SynthNode* node) {
-	if(!node) return 0;
-	*(u32*) lua_newuserdata(l, sizeof(u32)) = node->id;
-	luaL_setmetatable(l, "OscMT");
-	return 1;
-}
-
-SynthNode* NewLuaSynthNode(LuaState l, u8 type) {
-	auto node = NewSynthNode(type);
-	PushLuaSynthNode(l, node);
-	return node;
-}
-
-LUAFUNC(oscToString) {
-	auto oscID = *(u32*) luaL_checkudata(l, 1, "OscMT");
-	auto osc = GetSynthNode(oscID);
-
-	extern const char* oscTypeNames[];
-	char buf[256];
-
-	std::snprintf(buf, 256, "OSC #%d (%s)", oscID, oscTypeNames[osc->type]);
-	lua_pushstring(l, buf);
-
-	return 1;
-}
-
-LUAFUNC(modShift) {
-	if(lua_gettop(l) < 2) return 0;
-
-	s32 synid = GetSynthNodeArg(l, 1);
-	s32 operand = GetSynthNodeArg(l, 2);
-
-	auto syn = GetSynthNode(synid);
-	if(syn->type >= SYNSINE && syn->type <= SYNSQUARE) {
-		syn->phaseOffset = operand;
-		lua_pop(l, 1);
-		return 1;
-	}else{
-		puts("Note: Shift can only be set directly on waves!");
-	}
-
-	lua_pop(l, 1);
-	return 1;
-}
-
-LUAFUNC(modDuty) {
-	if(lua_gettop(l) < 2) return 0;
-
-	u32 synid = GetSynthNodeArg(l, 1);
-	u32 operand = GetSynthNodeArg(l, 2);
-
-	auto syn = GetSynthNode(synid);
-	if(syn->type == SYNSQUARE) {
-		syn->duty = operand;
-	}else{
-		puts("Note: Duty can only be set on square waves!");
-	}
-
-	lua_pop(l, 1);
-	return 1;
-}
-
-LUAFUNC(modTrigger) {
-	if(lua_gettop(l) < 2) return 0;
-
-	u32 synid = GetSynthNodeArg(l, 1);
-	u32 trigid = GetSynthNodeArg(l, 2);
-
-	auto syn = GetSynthNode(synid);
-	auto trg = GetSynthNode(trigid);
-
-	if((trg->type != SYNTRIGGER) && (trg->type != SYNMIDIKEYTRIGGER)) {
-		// Create wrapped trigger
-		return 0;
-	}
-
-	if(syn->type >= SYNLINEARENV && syn->type <= SYNARENV) {
-		if(trg->type == SYNMIDIKEYTRIGGER) {
-			syn->trigger = 1024+u8(trg->midiKey); // NOTE: Loses mode
-		}else{
-			syn->trigger = trigid;
-		}
-		lua_pop(l, 1);
-		return 1;
-	}else{
-		// TODO: Error
-	}
-
-	return 0;
-}
-
-LUAFUNC(seqCycles) {
-	if(lua_gettop(l) < 2) return 0;
-
-	auto osc = NewSynthNode(SYNCYCLE);
-	osc->seqrate = GetSynthNodeArg(l, 1);
-	osc->seqlength = 0;
-	u32 seqcapacity = 8;
-	osc->sequence = new s32[seqcapacity];
-
-	lua_insert(l, 2);
-
-	lua_pushnil(l);
-	while(lua_next(l, -2) != 0) {
-		if(lua_type(l, -2) != LUA_TNUMBER) break;
-
-		if(osc->seqlength >= seqcapacity) {
-			auto nseq = new s32[seqcapacity*2];
-			std::memcpy(nseq, osc->sequence, seqcapacity*sizeof(s32));
-
-			delete[] osc->sequence;
-			osc->sequence = nseq;
-			seqcapacity *= 2;
-		}
-
-		if(lua_isnumber(l, -1)) {
-			osc->sequence[osc->seqlength++] = NewValue(lua_tonumber(l, -1));
-
-		}else if(auto posc = (u32*)luaL_testudata(l, -1, "OscMT")) {
-			osc->sequence[osc->seqlength++] = *posc;
-		}
-
-		lua_pop(l, 1);
-	}
-
-	// lua_pop(l, 1);
-	return PushLuaSynthNode(l, osc);
+	return true;
 }
 
 void stackdump(){
@@ -333,7 +280,6 @@ void stackdump(){
 	for (i = 1; i <= top; i++) {  /* repeat for each level */
 		int t = lua_type(l, i);
 		switch (t) {
-
 			case LUA_TSTRING:  /* strings */
 			printf("'%s'", lua_tostring(l, i));
 			break;
@@ -349,7 +295,6 @@ void stackdump(){
 			default:  /* other values */
 			printf("%s", lua_typename(l, t));
 			break;
-
 		}
 		printf("  ");  /* put a separator */
 	}
