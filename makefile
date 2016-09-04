@@ -1,8 +1,7 @@
 GCC=g++
 
 SFLAGS=-std=c++14 -Wall -g
-SFLAGS+=-I/home/patrick/Development/libraries/fmodstudio/api/lowlevel/inc
-LFLAGS=-llua -ldl -Wl,--rpath=. libfmod.so.6 -lSDL2 -pthread -g
+LFLAGS=-llua -ldl -lSDL2 -pthread -g
 SRC=$(shell find . -name "*.cpp" | egrep -v "old")
 OBJ=$(SRC:%.cpp=%.o) 
 
