@@ -298,8 +298,14 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 			node->foutput = lerp(node->foutput, i, a);
 		}	break;
 		case NodeType::EffectsHighPass:{
-			f32 a = EvaluateSynthNodeInput(syn, node, 0);
-			node->foutput = a;
+			f32 i = EvaluateSynthNodeInput(syn, node, 0);
+			f32 f = EvaluateSynthNodeInput(syn, node, 1);
+			f32 rc = 1.f/(PI*2.f*f);
+			f32 a = rc / (syn->dt + rc);
+
+			f32 result = a * (node->foutput + i - node->phase);
+			node->phase = i;
+			node->foutput = result;
 		}	break;
 		case NodeType::EffectsConvolution:{
 			f32 a = EvaluateSynthNodeInput(syn, node, 0);
