@@ -10,13 +10,18 @@ namespace {
 	std::vector<Synth*> synths;
 
 	u32 sampleRate;
-	f32 averageLevel;
 	f32 envelope;
+	f32 signalDC;
 }
 
 template<class F1, class F2, class F3>
 F1 clamp(F1 v, F2 mn, F3 mx) {
 	return std::max(std::min(v, (F1)mx), (F1)mn);
+}
+
+template<class F1, class F2, class F3>
+decltype(F1{} + F2{}) lerp(F1 a, F2 b, F3 x) {
+	return a*F3(1 - x) + b*x;
 }
 
 void audio_callback(void* ud, u8* stream, s32 len);
@@ -327,27 +332,26 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		}
 	}
 
-	constexpr f32 threshold = 0.35f;
-	constexpr f32 slope = 0.9f;
-	constexpr f32 attackTime = 0.1f;
-	constexpr f32 releaseTime = 0.5f;
-	f32 attack = expf(-1.f / (sampleRate * attackTime));
-	f32 release = expf(-1.f / (sampleRate * releaseTime));
+	constexpr f32 attackTime  = 5.f / 1000.f;
+	constexpr f32 releaseTime = 200.f / 1000.f;
 
-	f32 avgCoeff = 0.5 * (1.0 - std::exp(-1.0 / (sampleRate * 0.2f)));
+	f32 attack  = std::exp(-1.f / (attackTime * sampleRate));
+	f32 release = std::exp(-1.f / (releaseTime * sampleRate));
 
 	for(u32 i = 0; i < (u32)buflen; i++){
 		f32 sample = outbuffer[i];
-		averageLevel += avgCoeff * (sample/averageLevel - averageLevel);
+		signalDC = lerp(signalDC, sample, 0.5f/sampleRate);
+		sample -= signalDC;
+		f32 absSignal = std::abs(sample);
 
-		f32 theta = (averageLevel > envelope)?attack:release;
-		envelope = (1.f - theta) * averageLevel + theta * envelope;
-
-		f32 gain = 1.f;
-		if(envelope > threshold) {
-			gain -= (envelope-threshold) * slope;
+		if(absSignal > envelope) {
+			envelope = lerp(envelope, absSignal, 1-attack);
+		}else{
+			envelope = lerp(envelope, absSignal, 1-release);
 		}
+		envelope = std::max(envelope, 1.f);
 
+		f32 gain = 0.7f/envelope;
 		outbuffer[i] = clamp(sample*gain, -1.f, 1.f);
 	}
 }
@@ -369,8 +373,8 @@ bool InitAudio(){
 	}
 
 	sampleRate = have.freq;
-	averageLevel = 1.f;
 	envelope = 1.0f;
+	signalDC = 0.f;
 
 	SDL_PauseAudioDevice(dev, 0); // start audio playing.
 
@@ -382,5 +386,5 @@ void DeinitAudio() {
 }
 
 void UpdateAudio() {
-	fprintf(stderr, "%f %f\n", averageLevel, envelope);
+	// fprintf(stderr, "%f %f\n", signalDC, envelope);
 }

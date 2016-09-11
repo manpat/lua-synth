@@ -58,7 +58,10 @@ int main(){
 
 		UpdateAudio();
 
-		luaL_dostring(l, "update()");
+		if(luaL_dostring(l, "update()")) {
+			puts(lua_tostring(l, -1));
+			lua_pop(l, 1);
+		}
 
 		SDL_Delay(1);
 	}
