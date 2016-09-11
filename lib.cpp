@@ -156,6 +156,19 @@ bool InitLua() {
 			return PushLuaSynthNode(s, NewADSREnvelope(s, a, 0.f, 0.f, 1.f, r, trg));
 		}},
 
+		{"lowpass", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto i = GetSynthNodeArg(2);
+			auto f = GetSynthNodeArg(3);
+			return PushLuaSynthNode(s, NewLowPassEffect(s, i, f));
+		}},
+		{"highpass", LUALAMBDA {
+			auto s = GetSynthArg(1);
+			auto i = GetSynthNodeArg(2);
+			auto f = GetSynthNodeArg(3);
+			return PushLuaSynthNode(s, NewHighPassEffect(s, i, f));
+		}},
+
 		{"value", LUALAMBDA {
 			auto s = GetSynthArg(1);
 			auto name = luaL_checkstring(l, 2);

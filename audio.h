@@ -118,6 +118,10 @@ u32 NewTimeSource(Synth*);
 u32 NewFadeEnvelope(Synth*, SynthParam duration, u32 trigger = ~0u);
 u32 NewADSREnvelope(Synth*, SynthParam attack, SynthParam decay, SynthParam sustain, SynthParam sustainlvl, SynthParam release, u32 trigger = ~0u);
 
+u32 NewLowPassEffect(Synth*, SynthParam input, SynthParam freq);
+u32 NewHighPassEffect(Synth*, SynthParam input, SynthParam freq);
+// u32 NewConvolutionEffect(Synth*, SynthParam freq);
+
 u32 NewAddOperation(Synth*, SynthParam left, SynthParam right);
 u32 NewSubtractOperation(Synth*, SynthParam left, SynthParam right);
 u32 NewMultiplyOperation(Synth*, SynthParam left, SynthParam right);

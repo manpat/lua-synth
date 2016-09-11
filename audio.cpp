@@ -84,6 +84,16 @@ u32 NewADSREnvelope(Synth* syn, SynthParam attack, SynthParam decay, SynthParam 
 	return CreateNode(syn, NodeType::EnvelopeADSR, attack, decay, sustain, sustainlvl, release, trigger);
 }
 
+u32 NewLowPassEffect(Synth* syn, SynthParam input, SynthParam freq) {
+	return CreateNode(syn, NodeType::EffectsLowPass, input, freq);
+}
+u32 NewHighPassEffect(Synth* syn, SynthParam input, SynthParam freq) {
+	return CreateNode(syn, NodeType::EffectsHighPass, input, freq);
+}
+// u32 NewConvolutionEffect(Synth* syn, SynthParam duration, u32 trigger) {
+// 	return CreateNode(syn, NodeType::EffectsConvolution, duration, trigger);
+// }
+
 u32 NewAddOperation(Synth* syn, SynthParam left, SynthParam right) {
 	return CreateNode(syn, NodeType::MathAdd, left, right);
 }
@@ -279,6 +289,21 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 		case NodeType::MathNegate: {
 			f32 a = EvaluateSynthNodeInput(syn, node, 0);
 			node->foutput = -a;
+		}	break;
+
+		case NodeType::EffectsLowPass:{
+			f32 i = EvaluateSynthNodeInput(syn, node, 0);
+			f32 f = EvaluateSynthNodeInput(syn, node, 1);
+			f32 a = syn->dt / (syn->dt + 1.f/(PI*2.f*f));
+			node->foutput = lerp(node->foutput, i, a);
+		}	break;
+		case NodeType::EffectsHighPass:{
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			node->foutput = a;
+		}	break;
+		case NodeType::EffectsConvolution:{
+			f32 a = EvaluateSynthNodeInput(syn, node, 0);
+			node->foutput = a;
 		}	break;
 
 		case NodeType::InteractionValue: {
