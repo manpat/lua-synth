@@ -205,7 +205,8 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 			node->phase += freq * syn->dt;
 		}	break;
 		case NodeType::SourceNoise: {
-			node->foutput = (std::rand() %100000) / 50000.f - 0.5f;
+			f32 val = (std::rand() %100000) / 50000.f - 0.5f;
+			node->foutput = clamp(val, -1.f, 1.f);
 		}	break;
 		case NodeType::SourceTime: {
 			node->foutput = syn->time;
