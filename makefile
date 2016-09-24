@@ -1,7 +1,7 @@
 GCC=g++
 
 SFLAGS=-std=c++14 -Wall -g
-LFLAGS=-llua -ldl -lSDL2 -pthread -g
+LFLAGS=-llua -ldl -lSDL2 -lsndfile -pthread -g
 SRC=$(shell find . -name "*.cpp" | egrep -v "old")
 OBJ=$(SRC:%.cpp=%.o) 
 

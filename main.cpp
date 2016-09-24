@@ -1,5 +1,6 @@
 #include "common.h"
-// #include "oldaudio.h"
+
+#include "recording.h"
 #include "audio.h"
 #include "lib.h"
 
@@ -22,13 +23,17 @@ int main(){
 		return 1;
 	}
 
-	extern LuaState l;
+	if(!InitRecording("audio.ogg")) {
+		puts("Recording init failed!");
+		return 1;
+	}
 
 	if(!InitAudio()) {
 		puts("Audio init failed!");
 		return 1;
 	}
 
+	extern LuaState l;
 	if(luaL_dofile(l, "new.lua")){
 		puts(lua_tostring(l, -1));
 		lua_pop(l, 1);
@@ -67,6 +72,7 @@ int main(){
 	}
 
 	DeinitAudio();
+	FinishRecording();
 	SDL_Quit();
 
 	return 0;

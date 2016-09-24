@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "recording.h"
 
 #include <algorithm>
 #include <cmath>
@@ -386,6 +387,8 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		f32 gain = 0.7f/envelope;
 		outbuffer[i] = clamp(sample*gain, -1.f, 1.f);
 	}
+
+	RecordBuffer(outbuffer, buflen);
 }
 
 bool InitAudio(){

@@ -27,7 +27,7 @@ low = s:lowpass(low*5, 35)
 local dronecutoff = 5 + s:fade(60)^2*5000
 local drone = s:lowpass(s:saw(30) + s:saw(30.1*3/2) * 0.2 + s:saw(60.5) * 0.2, dronecutoff + 80)
 drone = s:lowpass(drone, dronecutoff + 50)
-drone = s:lowpass(drone, 80) * s:fade(20)^2
+drone = s:lowpass(drone, 70) * s:fade(30)^2
 
 local bellenv = s:ar(0.02, 4, trg)^2 * s:fade(10)^2
 local bell = s:lowpass(s:sin(55) + s:noise()*0.3, 80) * bellenv
@@ -37,14 +37,14 @@ local width = 10
 signal = s:lowpass(signal*2, center+width+80)
 signal = s:lowpass(signal, center+width)
 -- signal = s:highpass(signal, center-width)
-s:output(s:fade(5) * (signal*0.5 + low + drone + bell))
+s:output(s:fade(5) * (signal*0.3 + low + drone * 0.7 + bell*0.7))
 
 local ratios = {
 	1, 1/2, 3/4, 4/3, 1/3, 3/8, 5/8, 2/3, 5/6
 }
 
 local i = 0
-local length = 3500
+local length = 4000
 
 function update()
 	i = i+1
