@@ -6,10 +6,11 @@
 
 #include <SDL2/SDL.h>
 #include <vector>
+#include <chrono>
 
 int main(){
 	SDL_Init(SDL_INIT_EVERYTHING);
-	auto sdlWindow = SDL_CreateWindow("FMOD Test",
+	auto sdlWindow = SDL_CreateWindow("LuaSynth Test",
 		SDL_WINDOWPOS_CENTERED_DISPLAY(1), SDL_WINDOWPOS_UNDEFINED,
 		200, 200, SDL_WINDOW_OPENGL);
 
@@ -33,13 +34,36 @@ int main(){
 		return 1;
 	}
 
+	SetAudioPostProcessHook([](f32* b, u32 len){
+		RecordBuffer(b, len);
+	});
+
+	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len){
+	// 	static f32 t = 0.f;
+	// 	for(u32 i = 0; i < len; i++){
+	// 		b[i] += std::sin(t)*0.1;
+	// 		t += s->dt*55.0*M_PI*2.0;
+	// 	}
+	// });
+
 	extern LuaState l;
 	if(luaL_dofile(l, "new.lua")){
 		puts(lua_tostring(l, -1));
 		lua_pop(l, 1);
 	}
-	
+
+	u32 updateRef = 0;
+	lua_getglobal(l, "update");
+	if(lua_isfunction(l, -1)) {
+		updateRef = luaL_ref(l, LUA_REGISTRYINDEX);
+	}
+
 	auto synth = GetSynth(0);
+	
+	using std::chrono::duration;
+	using std::chrono::duration_cast;
+	using clock = std::chrono::high_resolution_clock;
+	auto begin = clock::now();
 
 	bool running = true;
 	while(running){
@@ -56,16 +80,24 @@ int main(){
 				if(k == SDLK_SPACE){
 					// static f32 freqs[] {1./3.f, 1.f/2.f, 1.f, 2.f/3.f, 3.f/2.f, 4.f/5.f, 9.f/8.f};
 					// SetSynthControl(synth, "freq", freqs[rand()%sizeof(freqs)/4]*220.f);
-					TripSynthTrigger(synth, "env");
+					TripSynthTrigger(synth, "<global>");
 				}
 			}
 		}
 
 		UpdateAudio();
 
-		if(luaL_dostring(l, "update()")) {
-			puts(lua_tostring(l, -1));
-			lua_pop(l, 1);
+		auto end = clock::now();
+		auto diff = (end-begin);
+		f32 dt = duration_cast<duration<f32>>(diff).count();
+
+		if(updateRef) {
+			lua_rawgeti(l, LUA_REGISTRYINDEX, updateRef);
+			lua_pushnumber(l, dt);
+			if(lua_pcall(l, 1, 0, 0)) {
+				puts(lua_tostring(l, -1));
+				lua_pop(l, 1);
+			}
 		}
 
 		SDL_Delay(1);

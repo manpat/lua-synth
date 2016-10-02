@@ -46,7 +46,7 @@ local ratios = {
 local i = 0
 local length = 4000
 
-function update()
+function update(dt)
 	i = i+1
 
 	if i%length == 0 then

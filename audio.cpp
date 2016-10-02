@@ -1,5 +1,4 @@
 #include "audio.h"
-#include "recording.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +12,9 @@ namespace {
 	u32 sampleRate;
 	f32 envelope;
 	f32 signalDC;
+	AudioPostProcessHook* bufferPostProcessHook;
+	SynthPostProcessHook* synthPostProcessHook;
+	// TODO: Move state to audio context
 }
 
 template<class F1, class F2, class F3>
@@ -30,6 +32,9 @@ void audio_callback(void* ud, u8* stream, s32 len);
 Synth* CreateSynth() {
 	auto s = new Synth{};
 	s->playing = false;
+	s->globalTrigger.name = "<global>";
+	s->globalTrigger.state = 1;
+	s->chunkPostProcess = nullptr;
 
 	synths.push_back(s);
 	return s;
@@ -52,6 +57,16 @@ u32 CreateNode(Synth* syn, NodeType type, Args&&... vargs) {
 	for(u32 i = 0; i < sizeof...(vargs); i++) {
 		node.inputTypes |= args[i].isNode?(1u<<i):0;
 		node.inputs[i] = args[i].node;
+	}
+
+	switch(type) {
+		// Setting envelopes to NaN stops them from playing 
+		//	before triggered.
+		case NodeType::EnvelopeFade:
+		case NodeType::EnvelopeADSR:
+			node.phase = std::nan("");
+			break;
+		default: break;
 	}
 
 	syn->nodes.push_back(node);
@@ -146,6 +161,8 @@ void TripSynthTrigger(Synth* syn, const char* name) {
 
 	if(it != syn->triggers.end()) {
 		it->state = 1;
+	}else if(!strcmp(name, "<global>")) {
+		syn->globalTrigger.state = 1;
 	}
 }
 
@@ -163,7 +180,7 @@ f32 EvaluateSynthNodeInput(Synth* syn, SynthNode* node, u8 input) {
 
 u32 EvaluateTrigger(Synth* syn, SynthNode* node, u8 input) {
 	u32 nodeID = node->inputs[input].node;
-	if(nodeID == ~0u) return 0;
+	if(nodeID == ~0u) return syn->globalTrigger.state;
 	return syn->triggers[nodeID].state;
 }
 
@@ -220,6 +237,11 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 			if(EvaluateTrigger(syn, node, 1))
 				node->phase = 0.f;	
 
+			if(std::isnan(node->phase)) {
+				node->foutput = 0.f;
+				break;
+			}
+
 			node->foutput = node->phase;
 			node->phase = clamp(node->phase + syn->dt/duration, 0.f, 1.f);
 		}	break;
@@ -231,10 +253,15 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 			f32 release = EvaluateSynthNodeInput(syn, node, 4);
 
 			if(EvaluateTrigger(syn, node, 5)){
-				if(node->phase < (attack+decay+sustain+release))
+				if((node->phase >= 0.0) && node->phase < (attack+decay+sustain+release))
 					node->phase = node->foutput*attack;
 				else
 					node->phase = 0.f;
+			}
+
+			if(std::isnan(node->phase)) {
+				node->foutput = 0.f;
+				break;
 			}
 
 			f32 phase = node->phase;
@@ -324,11 +351,15 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 }
 
 void audio_callback(void* ud, u8* stream, s32 length) {
+	static std::vector<f32> intermediate;
+
 	auto outbuffer = (f32*) stream;
-	u32 buflen = (u32)length/4u;
+	u32 buflen = (u32)length/sizeof(f32);
 
 	for(u32 i = 0; i < buflen; i++)
 		outbuffer[i] = 0.f;
+
+	intermediate.resize(buflen);
 
 	u32 synthID = 0;
 	while(auto synth = GetSynth(synthID++)) {
@@ -342,11 +373,13 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		for(u32 i = 0; i < (u32)buflen; i++){
 			synth->frameID++;
 			UpdateSynthNode(synth, synth->outputNode);
-			outbuffer[i] += synth->nodes[synth->outputNode].foutput;
+			intermediate[i] = synth->nodes[synth->outputNode].foutput;
 			synth->time += synth->dt;
 
 			for(auto& t: synth->triggers)
 				t.state = 0;
+
+			synth->globalTrigger.state = 0;
 
 			for(auto& c: synth->controls){
 				f32 span = c.target-c.begin;
@@ -363,7 +396,20 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 				}
 			}
 		}
+
+		if(synth->chunkPostProcess)
+			synth->chunkPostProcess(synth, intermediate.data(), buflen);
+
+		if(synthPostProcessHook)
+			synthPostProcessHook(synth, intermediate.data(), buflen);
+		
+		u32 i = 0;
+		for(auto v: intermediate)
+			outbuffer[i++] += v;
 	}
+
+	if(bufferPostProcessHook)
+		bufferPostProcessHook(outbuffer, buflen);
 
 	constexpr f32 attackTime  = 5.f / 1000.f;
 	constexpr f32 releaseTime = 200.f / 1000.f;
@@ -387,8 +433,6 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		f32 gain = 0.7f/envelope;
 		outbuffer[i] = clamp(sample*gain, -1.f, 1.f);
 	}
-
-	RecordBuffer(outbuffer, buflen);
 }
 
 bool InitAudio(){
@@ -422,4 +466,12 @@ void DeinitAudio() {
 
 void UpdateAudio() {
 	// fprintf(stderr, "%f %f\n", signalDC, envelope);
+}
+
+void SetAudioPostProcessHook(AudioPostProcessHook* hook) {
+	bufferPostProcessHook = hook;
+}
+
+void SetSynthPostProcessHook(SynthPostProcessHook* hook) {
+	synthPostProcessHook = hook;
 }
