@@ -1,12 +1,14 @@
 #include "common.h"
 
 #include "recording.h"
-#include "audio.h"
-#include "lib.h"
+#include "synth.h"
+#include <lua.hpp>
 
 #include <SDL2/SDL.h>
 #include <vector>
 #include <chrono>
+
+using namespace synth;
 
 int main(){
 	SDL_Init(SDL_INIT_EVERYTHING);
@@ -19,13 +21,21 @@ int main(){
 		return 1;
 	}
 
-	if(!InitLua()) {
-		puts("Lua init failed!");
+	if(!InitRecording("audio.ogg")) {
+		puts("Recording init failed!");
 		return 1;
 	}
 
-	if(!InitRecording("audio.ogg")) {
-		puts("Recording init failed!");
+	auto l = luaL_newstate();
+	if(!l) {
+		puts("Lua init failed");
+		return 1;
+	}
+
+	luaL_openlibs(l);
+
+	if(!InitLuaLib(l)) {
+		puts("Synth lua lib init failed!");
 		return 1;
 	}
 
@@ -41,7 +51,6 @@ int main(){
 	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len, f32* stereoCoeffs){
 	// });
 
-	extern LuaState l;
 	if(luaL_dofile(l, "new.lua")){
 		puts(lua_tostring(l, -1));
 		lua_pop(l, 1);

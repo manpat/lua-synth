@@ -5,6 +5,11 @@
 #include <vector>
 #include <mutex>
 
+// Because I don't know how to forward declare lua_State
+#include <lua.hpp>
+
+namespace synth {
+
 enum class NodeType : u8 {
 	SourceSin,
 	SourceTri,
@@ -118,6 +123,8 @@ void DeinitAudio();
 void SetAudioPostProcessHook(AudioPostProcessHook*);
 void SetSynthPostProcessHook(SynthPostProcessHook*);
 
+bool InitLuaLib(lua_State*);
+
 Synth* CreateSynth();
 Synth* GetSynth(u32);
 
@@ -179,5 +186,7 @@ void TripSynthTrigger(Synth*, const char*);
 // 	- Values
 // 		- invariant: name, lerpable
 // 		- output: value
+
+}
 
 #endif

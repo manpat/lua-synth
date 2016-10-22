@@ -1,10 +1,17 @@
-#include "lib.h"
-#include "audio.h"
+#include "synth.h"
+#include "common.h"
+
+using namespace synth;
 
 #define LUAFUNC(x) static int x(LuaState l)
 #define LUALAMBDA [](LuaState l) -> s32
 
+using LuaState = lua_State*;
+using LibraryType = const luaL_Reg[];
+
 LuaState l;
+
+void stackdump();
 
 struct LuaSynthNode {
 	Synth* synth;
@@ -64,14 +71,12 @@ LuaSynthNode GetSynthNodeArg(u32 a, f32 def = 0.f) {
 	return n;
 }
 
-bool InitLua() {
-	l = luaL_newstate();
+bool synth::InitLuaLib(LuaState _l) {
+	l = _l;
 	if(!l) {
 		puts("Lua context acquisition failed");
 		return false;
 	}
-
-	luaL_openlibs(l);
 
 	static LibraryType synthLib = {
 		{"new", LUALAMBDA {

@@ -1,4 +1,4 @@
-#include "audio.h"
+#include "synth.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,6 +6,7 @@
 #include <SDL2/SDL.h>
 
 // https://chromium.googlesource.com/chromium/blink/+/master/Source/modules/webaudio/PannerNode.cpp
+namespace synth {
 
 namespace {
 	SDL_AudioDeviceID dev;
@@ -482,3 +483,5 @@ void SetAudioPostProcessHook(AudioPostProcessHook* hook) {
 void SetSynthPostProcessHook(SynthPostProcessHook* hook) {
 	synthPostProcessHook = hook;
 }
+
+} // namespace synth

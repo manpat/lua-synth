@@ -3,7 +3,7 @@ AR=ar
 
 SFLAGS=-std=c++14 -Wall -g
 LFLAGS=-llua -ldl -lSDL2 -lsndfile -pthread -g
-SRC=$(shell find . -name "*.cpp" | egrep -v "old|audio")
+SRC=$(shell find . -name "*.cpp" | egrep -v "old|synth|lib")
 OBJ=$(SRC:%.cpp=%.o) 
 
 parallelbuild:
@@ -13,9 +13,9 @@ build: $(OBJ) libsynth.a
 	@echo "-- Linking --"
 	@$(GCC) $(OBJ) $(LFLAGS) -L. -lsynth -obuild
 
-libsynth.a: audio.cpp audio.h
-	@$(GCC) $(SFLAGS) -c audio.cpp -g -oaudio.o
-	@$(AR) rcs libsynth.a audio.o
+libsynth.a: synth.o lib.o
+	@echo "-- Generating libsynth.a --"
+	@$(AR) rcs libsynth.a synth.o lib.o
 
 %.o: %.cpp %.h
 	@echo "-- Generating $@ --"
@@ -31,4 +31,4 @@ run: parallelbuild
 
 clean:
 	@echo "-- Cleaning --"
-	@rm -f *.o
+	@rm -f *.o libsynth.a
