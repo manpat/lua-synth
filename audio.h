@@ -75,19 +75,25 @@ struct SynthTrigger {
 	u32 state;
 };
 
+struct Synth;
+
 using AudioPostProcessHook = void(f32* buffer, u32 length);
-using SynthPostProcessHook = void(Synth*, f32* buffer, u32 length);
+using SynthPostProcessHook = void(Synth*, f32* buffer, u32 length, f32 stereoCoeffs[2]);
 
 struct Synth {
+	u32 id;
+
 	SynthPostProcessHook* chunkPostProcess;
 
 	std::mutex mutex;
 	std::vector<SynthNode> nodes;
 	std::vector<SynthControl> controls;
 	std::vector<SynthTrigger> triggers;
+
 	SynthTrigger globalTrigger;
 	u32 outputNode;
 	u32 frameID;
+
 	f64 dt;
 	f32 time;
 	bool playing;
@@ -109,7 +115,6 @@ struct SynthParam {
 
 bool InitAudio();
 void DeinitAudio();
-void UpdateAudio();
 void SetAudioPostProcessHook(AudioPostProcessHook*);
 void SetSynthPostProcessHook(SynthPostProcessHook*);
 

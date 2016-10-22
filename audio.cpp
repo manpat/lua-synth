@@ -5,6 +5,8 @@
 
 #include <SDL2/SDL.h>
 
+// https://chromium.googlesource.com/chromium/blink/+/master/Source/modules/webaudio/PannerNode.cpp
+
 namespace {
 	SDL_AudioDeviceID dev;
 	std::vector<Synth*> synths;
@@ -31,6 +33,7 @@ void audio_callback(void* ud, u8* stream, s32 len);
 
 Synth* CreateSynth() {
 	auto s = new Synth{};
+	s->id = synths.size();
 	s->playing = false;
 	s->globalTrigger.name = "<global>";
 	s->globalTrigger.state = 1;
@@ -356,10 +359,9 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 	auto outbuffer = (f32*) stream;
 	u32 buflen = (u32)length/sizeof(f32);
 
-	for(u32 i = 0; i < buflen; i++)
-		outbuffer[i] = 0.f;
+	std::memset(stream, 0, length);
 
-	intermediate.resize(buflen);
+	intermediate.resize(buflen/2);
 
 	u32 synthID = 0;
 	while(auto synth = GetSynth(synthID++)) {
@@ -370,7 +372,7 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		std::lock_guard<std::mutex>(synth->mutex);
 		synth->dt = 1.0/sampleRate;
 
-		for(u32 i = 0; i < (u32)buflen; i++){
+		for(u32 i = 0; i < intermediate.size(); i++){
 			synth->frameID++;
 			UpdateSynthNode(synth, synth->outputNode);
 			intermediate[i] = synth->nodes[synth->outputNode].foutput;
@@ -397,15 +399,19 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 			}
 		}
 
+		f32 stereoCoefficients[2] {1.f, 1.f};
+
 		if(synth->chunkPostProcess)
-			synth->chunkPostProcess(synth, intermediate.data(), buflen);
+			synth->chunkPostProcess(synth, intermediate.data(), intermediate.size(), stereoCoefficients);
 
 		if(synthPostProcessHook)
-			synthPostProcessHook(synth, intermediate.data(), buflen);
-		
+			synthPostProcessHook(synth, intermediate.data(), intermediate.size(), stereoCoefficients);
+
 		u32 i = 0;
-		for(auto v: intermediate)
-			outbuffer[i++] += v;
+		for(auto v: intermediate) {
+			outbuffer[i++] += v * stereoCoefficients[0];
+			outbuffer[i++] += v * stereoCoefficients[1];
+		}
 	}
 
 	if(bufferPostProcessHook)
@@ -439,16 +445,21 @@ bool InitAudio(){
 	SDL_AudioSpec want, have;
 
 	std::memset(&want, 0, sizeof(want));
-	want.freq = 44100;
+	want.freq = 22050;
 	want.format = AUDIO_F32SYS;
-	want.channels = 1;
-	want.samples = 32;
+	want.channels = 2;
+	want.samples = 256;
 	want.callback = audio_callback;
 
 	dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
 	if(!dev) {
 		printf("Failed to open audio: %s\n", SDL_GetError());
 		return false;
+	}
+
+	if(have.channels != 2) {
+		printf("Failed to get stereo output\n");
+		return false;		
 	}
 
 	sampleRate = have.freq;
@@ -462,10 +473,6 @@ bool InitAudio(){
 
 void DeinitAudio() {
 	SDL_CloseAudioDevice(dev);
-}
-
-void UpdateAudio() {
-	// fprintf(stderr, "%f %f\n", signalDC, envelope);
 }
 
 void SetAudioPostProcessHook(AudioPostProcessHook* hook) {

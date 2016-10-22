@@ -38,12 +38,7 @@ int main(){
 		RecordBuffer(b, len);
 	});
 
-	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len){
-	// 	static f32 t = 0.f;
-	// 	for(u32 i = 0; i < len; i++){
-	// 		b[i] += std::sin(t)*0.1;
-	// 		t += s->dt*55.0*M_PI*2.0;
-	// 	}
+	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len, f32* stereoCoeffs){
 	// });
 
 	extern LuaState l;
@@ -84,8 +79,6 @@ int main(){
 				}
 			}
 		}
-
-		UpdateAudio();
 
 		auto end = clock::now();
 		auto diff = (end-begin);
