@@ -11,7 +11,7 @@ using LibraryType = const luaL_Reg[];
 
 LuaState l;
 
-void stackdump();
+namespace{ void stackdump(); }
 
 struct LuaSynthNode {
 	Synth* synth;
@@ -69,6 +69,12 @@ LuaSynthNode GetSynthNodeArg(u32 a, f32 def = 0.f) {
 
 	n.value = def;
 	return n;
+}
+
+Synth* synth::GetSynthLua(lua_State* l, u32 a) {
+	auto s = (Synth**)luaL_testudata(l, a, "synthmt");
+	if(s) return *s;
+	return nullptr;
 }
 
 bool synth::InitLuaLib(LuaState _l) {
@@ -291,6 +297,8 @@ bool synth::InitLuaLib(LuaState _l) {
 	return true;
 }
 
+namespace {
+	
 void stackdump(){
 	int i;
 	int top = lua_gettop(l);
@@ -317,4 +325,6 @@ void stackdump(){
 		printf("  ");  /* put a separator */
 	}
 	printf("\n");  /* end the listing */
+}
+	
 }

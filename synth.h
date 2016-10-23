@@ -99,6 +99,9 @@ struct Synth {
 	u32 outputNode;
 	u32 frameID;
 
+	f32 panning, beginPan, targetPan;
+	f32 gain, beginGain, targetGain;
+
 	f64 dt;
 	f32 time;
 	bool playing;
@@ -124,6 +127,7 @@ void SetAudioPostProcessHook(AudioPostProcessHook*);
 void SetSynthPostProcessHook(SynthPostProcessHook*);
 
 bool InitLuaLib(lua_State*);
+Synth* GetSynthLua(lua_State*, u32);
 
 Synth* CreateSynth();
 Synth* GetSynth(u32);
@@ -154,6 +158,9 @@ u32 NewSynthTrigger(Synth*, const char*);
 
 void SetSynthControl(Synth*, const char*, f32, f32 = 0.f);
 void TripSynthTrigger(Synth*, const char*);
+
+void SetSynthPan(Synth*, f32);
+void SetSynthGain(Synth*, f32);
 
 // Sources
 // 	- Oscillators (Sin, saw, sqr, tri)

@@ -40,6 +40,10 @@ Synth* CreateSynth() {
 	s->globalTrigger.state = 1;
 	s->chunkPostProcess = nullptr;
 
+	s->gain = 0.f;
+	s->beginGain = 0.f;
+	s->targetGain = 1.f;
+
 	synths.push_back(s);
 	return s;
 }
@@ -134,19 +138,19 @@ u32 NewNegateOperation(Synth* syn, SynthParam arg) {
 }
 
 u32 NewSynthControl(Synth* syn, const char* name, f32 initialValue) {
-	std::lock_guard<std::mutex>(syn->mutex);
+	std::lock_guard<std::mutex> l(syn->mutex);
 	syn->controls.push_back({strdup(name), initialValue, initialValue, initialValue, 0.f});
 	return CreateNode(syn, NodeType::InteractionValue, syn->controls.size()-1u);
 }
 
 u32 NewSynthTrigger(Synth* syn, const char* name) {
-	std::lock_guard<std::mutex>(syn->mutex);
+	std::lock_guard<std::mutex> l(syn->mutex);
 	syn->triggers.push_back({strdup(name), 0});
 	return syn->triggers.size()-1u;
 }
 
 void SetSynthControl(Synth* syn, const char* name, f32 val, f32 lerpTime) {
-	std::lock_guard<std::mutex>(syn->mutex);
+	std::lock_guard<std::mutex> l(syn->mutex);
 	auto it = std::find_if(syn->controls.begin(), syn->controls.end(), [name](const SynthControl& ctl){
 		return !strcmp(ctl.name, name);
 	});
@@ -158,7 +162,7 @@ void SetSynthControl(Synth* syn, const char* name, f32 val, f32 lerpTime) {
 	}
 }
 void TripSynthTrigger(Synth* syn, const char* name) {
-	std::lock_guard<std::mutex>(syn->mutex);
+	std::lock_guard<std::mutex> l(syn->mutex);
 	auto it = std::find_if(syn->triggers.begin(), syn->triggers.end(), [name](const SynthTrigger& ctl){
 		return !strcmp(ctl.name, name);
 	});
@@ -168,6 +172,18 @@ void TripSynthTrigger(Synth* syn, const char* name) {
 	}else if(!strcmp(name, "<global>")) {
 		syn->globalTrigger.state = 1;
 	}
+}
+
+void SetSynthPan(Synth* s, f32 v) {
+	std::lock_guard<std::mutex> l(s->mutex);
+	s->beginPan = s->panning;
+	s->targetPan = v;
+}
+
+void SetSynthGain(Synth* s, f32 v) {
+	std::lock_guard<std::mutex> l(s->mutex);
+	s->beginGain = s->gain;
+	s->targetGain = v;
 }
 
 void UpdateSynthNode(Synth* syn, u32 nodeID);
@@ -370,7 +386,7 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 			continue;
 		}
 
-		std::lock_guard<std::mutex>(synth->mutex);
+		std::lock_guard<std::mutex> l(synth->mutex);
 		synth->dt = 1.0/sampleRate;
 
 		for(u32 i = 0; i < intermediate.size(); i++){
@@ -408,11 +424,26 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		if(synthPostProcessHook)
 			synthPostProcessHook(synth, intermediate.data(), intermediate.size(), stereoCoefficients);
 
+		f32 panning = synth->panning;
+		f32 panStep = (synth->targetPan - synth->beginPan) / intermediate.size();
+
+		f32 gain = synth->gain;
+		f32 gainStep = (synth->targetGain - synth->beginGain) / intermediate.size();
+
 		u32 i = 0;
 		for(auto v: intermediate) {
-			outbuffer[i++] += v * stereoCoefficients[0];
-			outbuffer[i++] += v * stereoCoefficients[1];
+			outbuffer[i++] += v * stereoCoefficients[0] * clamp(1-panning, 0, 1) * gain;
+			outbuffer[i++] += v * stereoCoefficients[1] * clamp(1+panning, 0, 1) * gain;
+
+			panning += panStep;
+			gain += gainStep;
 		}
+
+		synth->panning = panning;
+		synth->gain = gain;
+		
+		synth->beginPan = synth->targetPan;
+		synth->beginGain = synth->targetGain;
 	}
 
 	if(bufferPostProcessHook)
