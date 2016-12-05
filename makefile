@@ -1,8 +1,21 @@
-GCC=g++
-AR=ar
+# WINDOWSBUILD=1
 
-SFLAGS=-std=c++14 -Wall -g
-LFLAGS=-llua -ldl -lSDL2 -lsndfile -pthread -g
+ifdef WINDOWSBUILD
+	PREFIX=/opt/mxe/usr/bin/i686-w64-mingw32.static-
+	BUILDSUFFIX=.exe
+	ROOTPREFIX=/opt/mxe/usr/i686-w64-mingw32.static
+	TARGETLIBS=-lopengl32
+else
+	ROOTPREFIX=/usr/local
+	TARGETLIBS=-lGL -ldl
+endif
+
+GCC = $(PREFIX)g++
+AR = $(PREFIX)ar
+
+SFLAGS = -std=c++14 -Wall -g
+LFLAGS = -L$(ROOTPREFIX)/lib
+LFLAGS+= -llua -ldl -lSDL2 -lsndfile -pthread -g
 SRC=$(shell find . -name "*.cpp" | egrep -v "old|synth|lib")
 OBJ=$(SRC:%.cpp=%.o) 
 
