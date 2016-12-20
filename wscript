@@ -1,4 +1,4 @@
-
+import subprocess
 
 def options(cnf):
 	cnf.load('compiler_c compiler_cxx')
@@ -6,6 +6,8 @@ def options(cnf):
 	
 def configure(cnf):
 	cnf.load('compiler_c compiler_cxx')
+
+	cnf.env.DEMO = cnf.options.build_demo
 
 	try:
 		if cnf.options.build_demo:
@@ -15,23 +17,25 @@ def configure(cnf):
 		pass
 
 def build(bld):
+	cxxflags = ["-O2", "-g", "-std=c++11", "-Wall"]
+
 	bld.stlib(
 		target		= 'synth',
 		source		= ["synth.cpp", "lib.cpp"],
-		cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"]
+		cxxflags	= cxxflags
 	)
 
-	try:
-		if bld.options.build_demo:
-			libs = ['lua', 'sndfile', 'dl']
+	if bld.env.DEMO:
+		libs = ['lua', 'sndfile', 'dl']
 
-			bld.program(
-				target	= 'demo',
-				source	= bld.path.ant_glob("*.cpp", excl = ['synth.cpp', 'lib.cpp']),
-				cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
+		bld.program(
+			target		= 'demo',
+			source		= bld.path.ant_glob("*.cpp", excl = ['synth.cpp', 'lib.cpp']),
+			cxxflags	= cxxflags,
 
-				lib=libs,
-				use='SDL2 synth'
-			)
-	except AttributeError:
-		pass
+			lib=libs,
+			use='SDL2 synth'
+		)
+
+def run(ctx):
+	subprocess.Popen(["build/demo"])
