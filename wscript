@@ -1,4 +1,4 @@
-
+import subprocess
 
 def options(cnf):
 	cnf.load('compiler_c compiler_cxx')
@@ -15,11 +15,12 @@ def configure(cnf):
 					package='', uselib_store='SDL2')
 
 def build(bld):
+	cxxflags = ["-O2", "-g", "-std=c++11", "-Wall"]
+
 	bld.stlib(
 		target		= 'synth',
 		source		= ["synth.cpp", "lib.cpp"],
-		cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
-
+		cxxflags	= cxxflags
 		includes	= bld.env.INCLUDES_lua
 	)
 
@@ -27,8 +28,11 @@ def build(bld):
 		bld.program(
 			target		= 'demo',
 			source		= bld.path.ant_glob("*.cpp", excl = ['synth.cpp', 'lib.cpp']),
-			cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
+			cxxflags	= cxxflags,
 
-			lib			= ['lua', 'sndfile', 'dl'],
+			lib			= ['sndfile', 'dl'],
 			use			= 'SDL2 synth lua'
 		)
+
+def run(ctx):
+	subprocess.Popen(["build/demo"])

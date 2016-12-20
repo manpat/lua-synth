@@ -51,7 +51,7 @@ int main(){
 	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len, f32* stereoCoeffs){
 	// });
 
-	if(luaL_dofile(l, "new.lua")){
+	if(luaL_dofile(l, "profile.lua")){
 		puts(lua_tostring(l, -1));
 		lua_pop(l, 1);
 	}
