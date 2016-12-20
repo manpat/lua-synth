@@ -6,6 +6,7 @@ def options(cnf):
 	
 def configure(cnf):
 	cnf.load('compiler_c compiler_cxx')
+	cnf.check_cfg(args='--cflags', package='lua5.2', uselib_store='lua')
 
 	try:
 		if cnf.options.build_demo:
@@ -18,7 +19,9 @@ def build(bld):
 	bld.stlib(
 		target		= 'synth',
 		source		= ["synth.cpp", "lib.cpp"],
-		cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"]
+		cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
+
+		includes	= bld.env.INCLUDES_lua
 	)
 
 	try:
@@ -31,7 +34,7 @@ def build(bld):
 				cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
 
 				lib=libs,
-				use='SDL2 synth'
+				use='SDL2 synth lua'
 			)
 	except AttributeError:
 		pass
