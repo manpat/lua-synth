@@ -6,6 +6,7 @@ def options(cnf):
 	
 def configure(cnf):
 	cnf.load('compiler_c compiler_cxx')
+	cnf.check_cfg(args='--cflags', package='lua5.2', uselib_store='lua')
 
 	cnf.env.DEMO = cnf.options.build_demo
 
@@ -23,10 +24,11 @@ def build(bld):
 		target		= 'synth',
 		source		= ["synth.cpp", "lib.cpp"],
 		cxxflags	= cxxflags
+		includes	= bld.env.INCLUDES_lua
 	)
 
 	if bld.env.DEMO:
-		libs = ['lua', 'sndfile', 'dl']
+		libs = ['sndfile', 'dl']
 
 		bld.program(
 			target		= 'demo',
@@ -34,7 +36,7 @@ def build(bld):
 			cxxflags	= cxxflags,
 
 			lib=libs,
-			use='SDL2 synth'
+			use='SDL2 synth lua'
 		)
 
 def run(ctx):

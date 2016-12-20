@@ -5,6 +5,60 @@
 
 #include <SDL2/SDL.h>
 
+namespace {
+	template<class F1, class F2, class F3>
+	F1 clamp(F1 v, F2 mn, F3 mx) {
+		return std::max(std::min(v, (F1)mx), (F1)mn);
+	}
+
+	template<class F1, class F2, class F3>
+	decltype(F1{} + F2{}) lerp(F1 a, F2 b, F3 x) {
+		return a*F3(1 - x) + b*x;
+	}
+
+	// TODO: Test
+	f64 betterWrap(f64 v) {
+		return v - floor(v);
+	}
+
+	// f64 fastWrap(f64 v) {
+	// 	float ipart;
+	// 	if (v >= 0.0f)
+	// 		return std::modf(v, &ipart);
+	// 	else
+	// 		return 1.0 - std::modf(-v, &ipart);
+	// }
+
+	struct Wavetable {
+		f32*	data;
+		u32		size;
+
+		void Init(u32 length_) {
+			data = new f32[length_];
+			size = length_;
+		}
+
+		void Deinit() {
+			delete[] data;
+			data = nullptr;
+			size = 0;
+		}
+
+		f32 Evaluate(f64 phase) {
+			assert(data && size);
+
+			// u32 index = u32(std::fmod(phase, 1.0) * size) % size;
+			u32 index = u32(phase * size) % size;
+			// u32 index = u32(betterWrap(phase) * size) % size;
+			return data[index];
+		}
+
+		f32 operator()(f64 phase) {
+			return Evaluate(phase);
+		}
+	};	
+}
+
 // https://chromium.googlesource.com/chromium/blink/+/master/Source/modules/webaudio/PannerNode.cpp
 namespace synth {
 
@@ -18,16 +72,8 @@ namespace {
 	AudioPostProcessHook* bufferPostProcessHook;
 	SynthPostProcessHook* synthPostProcessHook;
 	// TODO: Move state to audio context
-}
 
-template<class F1, class F2, class F3>
-F1 clamp(F1 v, F2 mn, F3 mx) {
-	return std::max(std::min(v, (F1)mx), (F1)mn);
-}
-
-template<class F1, class F2, class F3>
-decltype(F1{} + F2{}) lerp(F1 a, F2 b, F3 x) {
-	return a*F3(1 - x) + b*x;
+	Wavetable sinTable;
 }
 
 void audio_callback(void* ud, u8* stream, s32 len);
@@ -215,7 +261,8 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 		case NodeType::SourceSin: {
 			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
 			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
-			node->foutput = std::sin(2.0*M_PI*(node->phase+phaseOffset));
+			// node->foutput = std::sin(2.0*M_PI*(node->phase+phaseOffset));
+			node->foutput = sinTable(node->phase+phaseOffset);
 			node->phase += freq * syn->dt;
 		}	break;
 		case NodeType::SourceTri: {
@@ -497,6 +544,11 @@ bool InitAudio(){
 	sampleRate = have.freq;
 	envelope = 1.0f;
 	signalDC = 0.f;
+
+	sinTable.Init(sampleRate);
+
+	for(u32 i = 0; i < sinTable.size; i++)
+		sinTable.data[i] = std::sin(i * 2.0 * PI);
 
 	SDL_PauseAudioDevice(dev, 0); // start audio playing.
 
