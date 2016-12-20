@@ -8,12 +8,11 @@ def configure(cnf):
 	cnf.load('compiler_c compiler_cxx')
 	cnf.check_cfg(args='--cflags', package='lua5.2', uselib_store='lua')
 
-	try:
-		if cnf.options.build_demo:
-			cnf.check_cfg(path='sdl2-config', args='--cflags --libs',
-						package='', uselib_store='SDL2')
-	except AttributeError:
-		pass
+	cnf.env.BUILD_DEMO = cnf.options.build_demo
+
+	if cnf.options.build_demo:
+		cnf.check_cfg(path='sdl2-config', args='--cflags --libs',
+					package='', uselib_store='SDL2')
 
 def build(bld):
 	bld.stlib(
@@ -24,17 +23,12 @@ def build(bld):
 		includes	= bld.env.INCLUDES_lua
 	)
 
-	try:
-		if bld.options.build_demo:
-			libs = ['lua', 'sndfile', 'dl']
+	if bld.env.BUILD_DEMO:
+		bld.program(
+			target		= 'demo',
+			source		= bld.path.ant_glob("*.cpp", excl = ['synth.cpp', 'lib.cpp']),
+			cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
 
-			bld.program(
-				target	= 'demo',
-				source	= bld.path.ant_glob("*.cpp", excl = ['synth.cpp', 'lib.cpp']),
-				cxxflags	= ["-O2", "-g", "-std=c++11", "-Wall"],
-
-				lib=libs,
-				use='SDL2 synth lua'
-			)
-	except AttributeError:
-		pass
+			lib			= ['lua', 'sndfile', 'dl'],
+			use			= 'SDL2 synth lua'
+		)
