@@ -20,7 +20,7 @@ def build(bld):
 	bld.stlib(
 		target		= 'synth',
 		source		= ["synth.cpp", "lib.cpp"],
-		cxxflags	= cxxflags
+		cxxflags	= cxxflags,
 		includes	= bld.env.INCLUDES_lua
 	)
 
