@@ -82,6 +82,7 @@ struct SynthTrigger {
 
 struct Synth;
 
+using AudioPostNormalizeHook = void(const f32* buffer, u32 length);
 using AudioPostProcessHook = void(f32* buffer, u32 length);
 using SynthPostProcessHook = void(Synth*, f32* buffer, u32 length, f32 stereoCoeffs[2]);
 
@@ -130,6 +131,7 @@ struct SynthParam {
 bool InitAudio();
 void DeinitAudio();
 void UpdateAudio();
+void SetAudioPostNormalizeHook(AudioPostNormalizeHook*);
 void SetAudioPostProcessHook(AudioPostProcessHook*);
 void SetSynthPostProcessHook(SynthPostProcessHook*);
 

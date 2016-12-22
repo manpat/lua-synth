@@ -76,6 +76,7 @@ namespace {
 	u32 sampleRate;
 	f32 envelope;
 	f32 signalDC;
+	AudioPostNormalizeHook* bufferReadHook;
 	AudioPostProcessHook* bufferPostProcessHook;
 	SynthPostProcessHook* synthPostProcessHook;
 	// TODO: Move state to audio context
@@ -548,6 +549,9 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		f32 gain = 0.7f/envelope;
 		outbuffer[i] = clamp(sample*gain, -1.f, 1.f);
 	}
+
+	if(bufferReadHook)
+		bufferReadHook(outbuffer, buflen);
 }
 
 bool InitAudio(){
@@ -623,6 +627,10 @@ void UpdateAudio() {
 		auto it = std::remove(synths.begin(), synths.end(), nullptr);
 		synths.erase(it, synths.end());
 	}
+}
+
+void SetAudioPostNormalizeHook(AudioPostNormalizeHook* hook) {
+	bufferReadHook = hook;
 }
 
 void SetAudioPostProcessHook(AudioPostProcessHook* hook) {

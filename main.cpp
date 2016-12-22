@@ -46,7 +46,7 @@ s32 main(){
 		return 1;
 	}
 
-	SetAudioPostProcessHook([](f32* b, u32 len){
+	SetAudioPostNormalizeHook([](const f32* b, u32 len){
 		RecordBuffer(b, len);
 	});
 
