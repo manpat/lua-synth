@@ -86,7 +86,14 @@ using AudioPostProcessHook = void(f32* buffer, u32 length);
 using SynthPostProcessHook = void(Synth*, f32* buffer, u32 length, f32 stereoCoeffs[2]);
 
 struct Synth {
+	enum Flags {
+		FlagPlaying = 1<<0,
+		FlagDeletionRequested = 1<<1,
+		FlagDeletionScheduled = 1<<2,
+	};
+
 	u32 id;
+	u32 flags;
 
 	SynthPostProcessHook* chunkPostProcess;
 
@@ -104,7 +111,6 @@ struct Synth {
 
 	f64 dt;
 	f32 time;
-	bool playing;
 };
 
 struct SynthParam {
@@ -123,6 +129,7 @@ struct SynthParam {
 
 bool InitAudio();
 void DeinitAudio();
+void UpdateAudio();
 void SetAudioPostProcessHook(AudioPostProcessHook*);
 void SetSynthPostProcessHook(SynthPostProcessHook*);
 
@@ -131,6 +138,7 @@ Synth* GetSynthLua(lua_State*, u32);
 
 Synth* CreateSynth();
 Synth* GetSynth(u32);
+void DestroyAllSynths();
 
 u32 NewSinOscillator(Synth*, SynthParam freq, SynthParam phaseOffset = {0.f});
 u32 NewTriOscillator(Synth*, SynthParam freq, SynthParam phaseOffset = {0.f});
