@@ -128,6 +128,8 @@ void SetSynthPostProcessHook(SynthPostProcessHook*);
 
 bool InitLuaLib(lua_State*);
 Synth* GetSynthLua(lua_State*, u32);
+void ExtendTriggerLib(const luaL_Reg[]);
+void ExtendSynthLib(const luaL_Reg[]);
 
 Synth* CreateSynth();
 Synth* GetSynth(u32);

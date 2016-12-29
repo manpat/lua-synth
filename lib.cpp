@@ -1,17 +1,18 @@
 #include "synth.h"
 #include "common.h"
 
-using namespace synth;
-
 #define LUAFUNC(x) static int x(LuaState l)
 #define LUALAMBDA [](LuaState l) -> s32
 
 using LuaState = lua_State*;
 using LibraryType = const luaL_Reg[];
 
-LuaState l;
+namespace synth {
 
-namespace{ void stackdump(); }
+namespace {
+	LuaState l;
+	void stackdump();
+}
 
 struct LuaSynthNode {
 	Synth* synth;
@@ -71,13 +72,13 @@ LuaSynthNode GetSynthNodeArg(u32 a, f32 def = 0.f) {
 	return n;
 }
 
-Synth* synth::GetSynthLua(lua_State* l, u32 a) {
+Synth* GetSynthLua(lua_State* l, u32 a) {
 	auto s = (Synth**)luaL_testudata(l, a, "synthmt");
 	if(s) return *s;
 	return nullptr;
 }
 
-bool synth::InitLuaLib(LuaState _l) {
+bool InitLuaLib(LuaState _l) {
 	l = _l;
 	if(!l) {
 		puts("Lua context acquisition failed");
@@ -297,34 +298,46 @@ bool synth::InitLuaLib(LuaState _l) {
 	return true;
 }
 
-namespace {
-	
-void stackdump(){
-	int i;
-	int top = lua_gettop(l);
-	printf("[LuaStack] ");
-	for (i = 1; i <= top; i++) {  /* repeat for each level */
-		int t = lua_type(l, i);
-		switch (t) {
-			case LUA_TSTRING:  /* strings */
-			printf("'%s'", lua_tostring(l, i));
-			break;
-
-			case LUA_TBOOLEAN:  /* booleans */
-			printf(lua_toboolean(l, i) ? "true" : "false");
-			break;
-
-			case LUA_TNUMBER:  /* numbers */
-			printf("%g", lua_tonumber(l, i));
-			break;
-
-			default:  /* other values */
-			printf("%s", lua_typename(l, t));
-			break;
-		}
-		printf("  ");  /* put a separator */
-	}
-	printf("\n");  /* end the listing */
+void ExtendTriggerLib(LibraryType lib) {
+	luaL_getmetatable(l, "triggermt");
+	lua_getfield(l, -1, "__index");
+	luaL_setfuncs(l, lib, 0);
 }
-	
+
+void ExtendSynthLib(LibraryType lib) {
+	luaL_getmetatable(l, "synthmt");
+	lua_getfield(l, -1, "__index");
+	luaL_setfuncs(l, lib, 0);
+}
+
+namespace {
+	void stackdump(){
+		int i;
+		int top = lua_gettop(l);
+		printf("[LuaStack] ");
+		for (i = 1; i <= top; i++) {  /* repeat for each level */
+			int t = lua_type(l, i);
+			switch (t) {
+				case LUA_TSTRING:  /* strings */
+				printf("'%s'", lua_tostring(l, i));
+				break;
+
+				case LUA_TBOOLEAN:  /* booleans */
+				printf(lua_toboolean(l, i) ? "true" : "false");
+				break;
+
+				case LUA_TNUMBER:  /* numbers */
+				printf("%g", lua_tonumber(l, i));
+				break;
+
+				default:  /* other values */
+				printf("%s", lua_typename(l, t));
+				break;
+			}
+			printf("  ");  /* put a separator */
+		}
+		printf("\n");  /* end the listing */
+	}
+}
+
 }
