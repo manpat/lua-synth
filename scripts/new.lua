@@ -26,20 +26,19 @@ local bass = s:tri(scale[root], r()) + (s:sin(scale[root]/2, r()) + s:sin(scale[
 local o = bass
 	+ s:sqr(scale[3], r())
 	+ s:sqr(scale[5], r())
-	+ s:saw(scale[5], r())
+	+ s:saw(scale[7], r())
 	+ s:saw(scale[8] * 2, r())
 
 local belltrg = s:trigger("bell")
-local bell = s:saw(scale[1] * 3, r()) * s:ar(0.01, 0.4, belltrg)
-	-- + s:tri(scale[1] * 2, r()) * (s:ar(0.01, 0.05, belltrg)^2) * 3
-	+ s:tri(scale[1] * 4, r()) * (s:ar(0.01, 0.05, belltrg)^2) * 3
+local bell = s:saw(scale[1] * 3 - (s:fade(0.2, belltrg)^2) * 550, r()) * s:ar(0.01, 0.4, belltrg) * 0.4
+	+ s:tri(scale[1] * 4, r()) * (s:ar(0.01, 0.05, belltrg)^2)
 	+ s:noise() * (s:ar(0.01, 0.5, belltrg)^9) * 4
 
 local kicktrg = s:trigger("kick")
 local kick = (s:sin(51) + s:lowpass(s:saw(53), 10)) * (s:ar(0.01, 0.3, kicktrg)^2) * 20
 
-o = s:lowpass(o, 50 + ((s:sin(tempo*4)*0.5 + 0.5)^3) * 1600)
-o = s:lowpass(o, 50 + (s:fade(0.5, kicktrg)^3) * 1600)
+o = s:lowpass(o, 50 + (s:fade(0.5, kicktrg)^3) * 6400)
+o = s:lowpass(o, 50 + ((s:sin(tempo*3.1415)*0.5 + 0.5)^3) * 1600)
 o = o + bell
 o = o + kick
 

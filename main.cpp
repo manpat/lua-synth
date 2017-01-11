@@ -53,7 +53,7 @@ s32 main(){
 	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len, f32* stereoCoeffs){
 	// });
 
-	const char* soundscript = "scripts/new.lua";
+	const char* soundscript = "scripts/scratch0.lua";
 
 	u32 fileModTime = getFileModificationTime(soundscript);
 	if(luaL_dofile(l, soundscript)){
@@ -74,6 +74,7 @@ s32 main(){
 	using clock = std::chrono::high_resolution_clock;
 	auto begin = clock::now();
 
+	f32 elapsed = 0.f;
 	f32 pollTimer = 0.f;
 
 	bool running = true;
@@ -99,6 +100,7 @@ s32 main(){
 		auto end = clock::now();
 		auto diff = (end-begin);
 		f32 dt = duration_cast<duration<f32>>(diff).count();
+		elapsed += dt;
 		begin = end;
 
 		pollTimer -= dt;
@@ -127,8 +129,9 @@ s32 main(){
 
 		if(updateRef) {
 			lua_rawgeti(l, LUA_REGISTRYINDEX, updateRef);
+			lua_pushnumber(l, elapsed);
 			lua_pushnumber(l, dt);
-			if(lua_pcall(l, 1, 0, 0)) {
+			if(lua_pcall(l, 2, 0, 0)) {
 				puts(lua_tostring(l, -1));
 				lua_pop(l, 1);
 			}

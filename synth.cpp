@@ -410,8 +410,13 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 		case NodeType::EffectsLowPass:{
 			f32 i = EvaluateSynthNodeInput(syn, node, 0);
 			f32 f = EvaluateSynthNodeInput(syn, node, 1);
-			f32 a = syn->dt / (syn->dt + 1.f/(PI*2.f*f));
-			node->foutput = lerp(node->foutput, i, a);
+			if(f > 0.f) {
+				f32 a = syn->dt / (syn->dt + 1.f/(PI*2.f*f));
+				node->foutput = lerp(node->foutput, i, a);
+			}else{
+				node->foutput = 0.f;
+			}
+
 		}	break;
 		case NodeType::EffectsHighPass:{
 			f32 i = EvaluateSynthNodeInput(syn, node, 0);
