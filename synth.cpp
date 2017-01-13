@@ -47,10 +47,16 @@ namespace {
 		f32 Evaluate(f64 phase) {
 			assert(data && size);
 
+			f64 idx = phase * size;
+			u32 iidx = u32(idx);
+			f64 frac = idx - iidx;
+
 			// u32 index = u32(std::fmod(phase, 1.0) * size) % size;
-			u32 index = u32(phase * size) % size;
+			u32 index = iidx % size;
+			u32 index2 = (iidx + 1) % size;
 			// u32 index = u32(betterWrap(phase) * size) % size;
-			return data[index];
+			return lerp(data[index], data[index2], frac);
+			// return data[index];
 		}
 
 		f32 operator()(f64 phase) {
@@ -65,23 +71,27 @@ namespace synth {
 namespace {
 	SDL_AudioDeviceID dev;
 	std::vector<Synth*> synths;
+	std::mutex synthMutex;
 
 	u32 sampleRate;
 	f32 envelope;
 	f32 signalDC;
+	AudioPostNormalizeHook* bufferReadHook;
 	AudioPostProcessHook* bufferPostProcessHook;
 	SynthPostProcessHook* synthPostProcessHook;
 	// TODO: Move state to audio context
 
 	Wavetable sinTable;
+	Wavetable triangleTable;
+	Wavetable sawTable;
+	Wavetable noiseTable;
 }
 
 void audio_callback(void* ud, u8* stream, s32 len);
 
 Synth* CreateSynth() {
 	auto s = new Synth{};
-	s->id = synths.size();
-	s->playing = false;
+	s->flags = 0;
 	s->globalTrigger.name = "<global>";
 	s->globalTrigger.state = 1;
 	s->chunkPostProcess = nullptr;
@@ -90,6 +100,8 @@ Synth* CreateSynth() {
 	s->beginGain = 0.f;
 	s->targetGain = 1.f;
 
+	std::lock_guard<std::mutex> guard{synthMutex};
+	s->id = synths.size();
 	synths.push_back(s);
 	return s;
 }
@@ -99,6 +111,17 @@ Synth* GetSynth(u32 id) {
 		return nullptr;
 
 	return synths[id];
+}
+
+void DestroyAllSynths() {
+	using Fl = Synth::Flags;
+
+	for(auto s: synths) {
+		if(!s) continue;
+
+		std::lock_guard<std::mutex> guard{s->mutex};
+		s->flags |= Fl::FlagDeletionRequested;
+	}
 }
 
 template<class... Args>
@@ -261,23 +284,19 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 		case NodeType::SourceSin: {
 			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
 			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
-			// node->foutput = std::sin(2.0*M_PI*(node->phase+phaseOffset));
-			node->foutput = sinTable(node->phase+phaseOffset);
+			node->foutput = sinTable(node->phase + phaseOffset);
 			node->phase += freq * syn->dt;
 		}	break;
 		case NodeType::SourceTri: {
 			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
 			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
-			auto nph = std::fmod((node->phase+phaseOffset), 1.f);
-			node->foutput = (nph <= 0.5f)
-				?(nph-0.25f)*4.f
-				:(0.75f-nph)*4.f;
+			node->foutput = triangleTable(node->phase + phaseOffset);
 			node->phase += freq * syn->dt;
 		}	break;
 		case NodeType::SourceSaw: {
 			f32 freq = EvaluateSynthNodeInput(syn, node, 0);
 			f32 phaseOffset = EvaluateSynthNodeInput(syn, node, 1);
-			node->foutput = std::fmod((node->phase+phaseOffset)*2.f, 2.f)-1.f;
+			node->foutput = sawTable(node->phase + phaseOffset);
 			node->phase += freq * syn->dt;
 		}	break;
 		case NodeType::SourceSqr: {
@@ -290,8 +309,9 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 			node->phase += freq * syn->dt;
 		}	break;
 		case NodeType::SourceNoise: {
-			f32 val = (std::rand() %100000) / 50000.f - 0.5f;
+			f32 val = (std::rand() %100000) / 50000.f - 0.5f; // noiseTable(node->phase);
 			node->foutput = clamp(val, -1.f, 1.f);
+			// node->phase += 1.f / noiseTable.size;
 		}	break;
 		case NodeType::SourceTime: {
 			node->foutput = syn->time;
@@ -390,8 +410,13 @@ void UpdateSynthNode(Synth* syn, u32 nodeID) {
 		case NodeType::EffectsLowPass:{
 			f32 i = EvaluateSynthNodeInput(syn, node, 0);
 			f32 f = EvaluateSynthNodeInput(syn, node, 1);
-			f32 a = syn->dt / (syn->dt + 1.f/(PI*2.f*f));
-			node->foutput = lerp(node->foutput, i, a);
+			if(f > 0.f) {
+				f32 a = syn->dt / (syn->dt + 1.f/(PI*2.f*f));
+				node->foutput = lerp(node->foutput, i, a);
+			}else{
+				node->foutput = 0.f;
+			}
+
 		}	break;
 		case NodeType::EffectsHighPass:{
 			f32 i = EvaluateSynthNodeInput(syn, node, 0);
@@ -427,9 +452,12 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 
 	intermediate.resize(buflen/2);
 
+	std::lock_guard<std::mutex> guard{synthMutex};
+	using Fl = Synth::Flags;
+
 	u32 synthID = 0;
 	while(auto synth = GetSynth(synthID++)) {
-		if(!synth->playing) {
+		if(!synth || !(synth->flags & Fl::FlagPlaying)) {
 			continue;
 		}
 
@@ -475,12 +503,16 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		f32 panStep = (synth->targetPan - synth->beginPan) / intermediate.size();
 
 		f32 gain = synth->gain;
-		f32 gainStep = (synth->targetGain - synth->beginGain) / intermediate.size();
+		f32 gainTarget = synth->targetGain;
+		if(synth->flags & Fl::FlagDeletionRequested)
+			gainTarget = -0.1f;
+
+		f32 gainStep = (gainTarget - synth->beginGain) / intermediate.size();
 
 		u32 i = 0;
 		for(auto v: intermediate) {
-			outbuffer[i++] += v * stereoCoefficients[0] * clamp(1-panning, 0, 1) * gain;
-			outbuffer[i++] += v * stereoCoefficients[1] * clamp(1+panning, 0, 1) * gain;
+			outbuffer[i++] += v * stereoCoefficients[0] * clamp(1-panning, 0, 1) * clamp(gain, 0, 1);
+			outbuffer[i++] += v * stereoCoefficients[1] * clamp(1+panning, 0, 1) * clamp(gain, 0, 1);
 
 			panning += panStep;
 			gain += gainStep;
@@ -488,6 +520,10 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 
 		synth->panning = panning;
 		synth->gain = gain;
+
+		// Stop playing
+		if(gain < 0.f && gainTarget < 0.f)
+			synth->flags = Fl::FlagDeletionScheduled;
 		
 		synth->beginPan = synth->targetPan;
 		synth->beginGain = synth->targetGain;
@@ -499,8 +535,8 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 	constexpr f32 attackTime  = 5.f / 1000.f;
 	constexpr f32 releaseTime = 200.f / 1000.f;
 
-	f32 attack  = std::exp(-1.f / (attackTime * sampleRate));
-	f32 release = std::exp(-1.f / (releaseTime * sampleRate));
+	const f32 attack  = std::exp(-1.f / (attackTime * sampleRate));
+	const f32 release = std::exp(-1.f / (releaseTime * sampleRate));
 
 	for(u32 i = 0; i < (u32)buflen; i++){
 		f32 sample = outbuffer[i];
@@ -518,6 +554,9 @@ void audio_callback(void* ud, u8* stream, s32 length) {
 		f32 gain = 0.7f/envelope;
 		outbuffer[i] = clamp(sample*gain, -1.f, 1.f);
 	}
+
+	if(bufferReadHook)
+		bufferReadHook(outbuffer, buflen);
 }
 
 bool InitAudio(){
@@ -546,9 +585,25 @@ bool InitAudio(){
 	signalDC = 0.f;
 
 	sinTable.Init(sampleRate);
+	sawTable.Init(sampleRate);
+	noiseTable.Init(sampleRate);
+	triangleTable.Init(sampleRate);
 
-	for(u32 i = 0; i < sinTable.size; i++)
-		sinTable.data[i] = std::sin(i * 2.0 * PI);
+	f64 sampleDT = 1.f / sampleRate;
+
+	for(u32 i = 0; i < sinTable.size; i++) {
+		sinTable.data[i] = std::sin(i * 2.0 * PI * sampleDT);
+
+		auto nph = std::fmod(i * sampleDT, 1.f);
+		triangleTable.data[i] = (nph <= 0.5f)
+			?(nph-0.25f)*4.f
+			:(0.75f-nph)*4.f;
+
+		sawTable.data[i] = std::fmod(i*sampleDT*2.f, 2.f)-1.f;
+	}
+
+	for(u32 i = 0; i < noiseTable.size; i++)
+		noiseTable.data[i] = (std::rand() %100000) / 50000.f - 0.5f;
 
 	SDL_PauseAudioDevice(dev, 0); // start audio playing.
 
@@ -557,6 +612,30 @@ bool InitAudio(){
 
 void DeinitAudio() {
 	SDL_CloseAudioDevice(dev);
+}
+
+void UpdateAudio() {
+	using Fl = Synth::Flags;
+
+	bool synthsDirty = false;
+
+	for(auto& s: synths) {
+		if(s->flags & Fl::FlagDeletionScheduled) {
+			delete s;
+			s = nullptr;
+			synthsDirty = true;
+		}
+	}
+
+	if(synthsDirty) {
+		std::lock_guard<std::mutex> guard{synthMutex};
+		auto it = std::remove(synths.begin(), synths.end(), nullptr);
+		synths.erase(it, synths.end());
+	}
+}
+
+void SetAudioPostNormalizeHook(AudioPostNormalizeHook* hook) {
+	bufferReadHook = hook;
 }
 
 void SetAudioPostProcessHook(AudioPostProcessHook* hook) {

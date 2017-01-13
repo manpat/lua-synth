@@ -47,7 +47,7 @@ local i = 0
 local length = 4000
 
 function update(dt)
-	i = i+1
+	i = i+dt
 
 	if i%length == 0 then
 		-- local nfreq = ratios[math.random(#ratios)] * 220.0

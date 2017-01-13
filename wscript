@@ -11,6 +11,7 @@ def configure(cnf):
 	cnf.env.BUILD_DEMO = cnf.options.build_demo
 
 	if cnf.options.build_demo:
+		cnf.check_cfg(args='--libs', package='lua5.2', uselib_store='lua')
 		cnf.check_cfg(path='sdl2-config', args='--cflags --libs',
 					package='', uselib_store='SDL2')
 
@@ -35,4 +36,4 @@ def build(bld):
 		)
 
 def run(ctx):
-	subprocess.Popen(["build/demo"])
+	subprocess.call(["build/demo"])

@@ -101,7 +101,7 @@ bool InitLuaLib(LuaState _l) {
 			auto f = GetSynthNodeArg(2);
 			if(f.isNode) {
 				s->outputNode = f.node;
-				s->playing = true;
+				s->flags |= Synth::FlagPlaying;
 			}
 			return 0;
 		}},

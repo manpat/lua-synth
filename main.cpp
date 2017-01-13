@@ -10,7 +10,9 @@
 
 using namespace synth;
 
-int main(){
+u64 getFileModificationTime(const char*);
+
+s32 main(){
 	SDL_Init(SDL_INIT_EVERYTHING);
 	auto sdlWindow = SDL_CreateWindow("LuaSynth Test",
 		SDL_WINDOWPOS_CENTERED_DISPLAY(1), SDL_WINDOWPOS_UNDEFINED,
@@ -44,14 +46,17 @@ int main(){
 		return 1;
 	}
 
-	SetAudioPostProcessHook([](f32* b, u32 len){
+	SetAudioPostNormalizeHook([](const f32* b, u32 len){
 		RecordBuffer(b, len);
 	});
 
 	// SetSynthPostProcessHook([](Synth* s, f32* b, u32 len, f32* stereoCoeffs){
 	// });
 
-	if(luaL_dofile(l, "profile.lua")){
+	const char* soundscript = "scripts/scratch0.lua";
+
+	u32 fileModTime = getFileModificationTime(soundscript);
+	if(luaL_dofile(l, soundscript)){
 		puts(lua_tostring(l, -1));
 		lua_pop(l, 1);
 	}
@@ -68,6 +73,9 @@ int main(){
 	using std::chrono::duration_cast;
 	using clock = std::chrono::high_resolution_clock;
 	auto begin = clock::now();
+
+	f32 elapsed = 0.f;
+	f32 pollTimer = 0.f;
 
 	bool running = true;
 	while(running){
@@ -92,11 +100,38 @@ int main(){
 		auto end = clock::now();
 		auto diff = (end-begin);
 		f32 dt = duration_cast<duration<f32>>(diff).count();
+		elapsed += dt;
+		begin = end;
+
+		pollTimer -= dt;
+		if(pollTimer < 0.f) {
+			u64 newFileModTime = getFileModificationTime(soundscript);
+			if(newFileModTime > fileModTime) {
+				DestroyAllSynths();
+				if(luaL_dofile(l, soundscript)){
+					puts(lua_tostring(l, -1));
+					lua_pop(l, 1);
+				}
+
+				lua_getglobal(l, "update");
+				if(lua_isfunction(l, -1)) {
+					luaL_unref(l, LUA_REGISTRYINDEX, updateRef);
+					updateRef = luaL_ref(l, LUA_REGISTRYINDEX);
+				}
+
+				fileModTime = newFileModTime;
+			}
+			
+			pollTimer = 0.25f;
+		}
+
+		UpdateAudio();
 
 		if(updateRef) {
 			lua_rawgeti(l, LUA_REGISTRYINDEX, updateRef);
+			lua_pushnumber(l, elapsed);
 			lua_pushnumber(l, dt);
-			if(lua_pcall(l, 1, 0, 0)) {
+			if(lua_pcall(l, 2, 0, 0)) {
 				puts(lua_tostring(l, -1));
 				lua_pop(l, 1);
 			}
@@ -112,3 +147,11 @@ int main(){
 	return 0;
 }
 
+
+#include <sys/stat.h>
+
+u64 getFileModificationTime(const char* path) {
+	struct stat attr;
+    stat(path, &attr);
+    return attr.st_mtime;
+}
